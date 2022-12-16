@@ -1,0 +1,10 @@
+version: "3.8"
+
+services:
+  redis:
+    image: redis:7.0
+    ports:
+      # Map to something other than default 6379 on host in case Redis
+      # is also running natively on host.
+      # Format is "host:container"
+      - "6380:6379"
