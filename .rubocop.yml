@@ -25,6 +25,9 @@ Style/Documentation:
 Style/StringLiterals:
   Enabled: false
 
+Style/ClassAndModuleChildren:
+  Enabled: false
+
 Metrics/BlockLength:
   Max: 25
   IgnoredMethods: ['describe', 'it', 'context']
