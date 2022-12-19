@@ -8,6 +8,16 @@ bin/rails db:create
 bin/dev
 ```
 
+## References
+
+* [StimulsReflex](https://docs.stimulusreflex.com/): extends capabilities of Rails and [Stimulus](https://stimulus.hotwired.dev/)
+* [Mrujs](https://mrujs.com/)
+* [CableReady](https://cableready.stimulusreflex.com/)
+
+## Chapter 1: Setup
+
+Note project is using [Mrujs](https://mrujs.com/). Mrujs is intended as a direct replacement for `@rails/ujs`, which used to ship by default with Rails 6 but has since been deprecated.
+
 ## Chapter 2
 
 ### Devise
@@ -28,6 +38,8 @@ bin/rails g devise:controllers users -c=sessions
 Added a bunch of Tailwind stuff that isn't working, despite downgrading to same version as author's in `package.json`.
 
 Had to comment out: `app/assets/stylesheets/forms.css`
+
+Actually: Remove spaces between `hover` and `focus` and `:` fixes compilation errors.
 
 ### Stimulus
 
@@ -93,3 +105,17 @@ rails action_text:install
 bundle install
 rails db:migrate
 ```
+
+### Creating jobs in a slideover
+
+Up until now, the jobs routes are all standard Rails. i.e. clicking on the new job link takes the user to a new page to fill out the job posting form. After they submit the form they are redirected to the job posting.
+
+Goal: Open job form in a slideover drawer instead of navigating to a new page. When form submitted, newly created job should be added to the existing list of jobs and the slide over drawer should close.
+
+Create new stimulus controller:
+
+```
+rails g stimulus slideover
+```
+
+Left just before `touch app/views/shared/_slideover.html.erb`
