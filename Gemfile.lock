@@ -101,10 +101,14 @@ GEM
     diff-lcs (1.5.0)
     e2mmap (0.1.0)
     erubi (1.11.0)
+    ffi (1.15.5)
     globalid (1.0.0)
       activesupport (>= 5.0)
     i18n (1.12.0)
       concurrent-ruby (~> 1.0)
+    image_processing (1.12.2)
+      mini_magick (>= 4.9.5, < 5)
+      ruby-vips (>= 2.0.17, < 3)
     inline_svg (1.8.0)
       activesupport (>= 3.0)
       nokogiri (>= 1.6)
@@ -132,6 +136,7 @@ GEM
       net-smtp
     marcel (1.0.2)
     method_source (1.0.0)
+    mini_magick (4.12.0)
     mini_mime (1.1.2)
     minitest (5.16.3)
     msgpack (1.6.0)
@@ -215,6 +220,8 @@ GEM
       rack (>= 1.1)
       rubocop (>= 1.33.0, < 2.0)
     ruby-progressbar (1.11.0)
+    ruby-vips (2.1.4)
+      ffi (~> 1.12)
     solargraph (0.47.2)
       backport (~> 1.2)
       benchmark
@@ -280,6 +287,7 @@ DEPENDENCIES
   cssbundling-rails
   debug
   devise!
+  image_processing (~> 1.2)
   inline_svg (~> 1.8)
   jbuilder
   jsbundling-rails

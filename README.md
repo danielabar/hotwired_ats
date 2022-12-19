@@ -71,3 +71,25 @@ To get the flash partial `app/views/shared/_flash.html.erb` to render, update ap
   </div>
 </body>
 ```
+
+## Chapter 3: Job Postings
+
+Standard Rails + [CableReady](https://cableready.stimulusreflex.com/) + a little Turbo Steams and Turbo Frames
+
+> CableReady is a Ruby gem that lets you create great real-time user experiences by triggering client-side DOM changes, events and notifications over [ActionCable](https://guides.rubyonrails.org/action_cable_overview.html) web sockets. These commands are called operations.
+
+A user of our ATS can create job postings that (later) applicants can apply to.
+
+Use `scaffold` generator to create Job model, controller, and views:
+
+```
+rails g scaffold Job title:string status:string:index job_type:string:index location:string account:references
+```
+
+Use [ActionText](https://guides.rubyonrails.org/action_text_overview.html) to store job description rather than having longtext description column on jobs table directly.
+
+```
+rails action_text:install
+bundle install
+rails db:migrate
+```
