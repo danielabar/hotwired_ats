@@ -1,4 +1,4 @@
-@layer utilities {
+/* @layer utilities {
   .btn {
     @apply px-8 py-2 hover: cursor-pointer focus:outline-none focus:ring-2 focus:ring-offset-1 rounded-sm;
   }
@@ -39,4 +39,4 @@
 
 .form-group input[type=file]::file-selector-button {
   @apply btn bg-white border border-blue-500 text-blue-700 hover: bg-blue-700 hover:text-white focus:ring-blue-700 outline-none text-sm shadow-none;
-}
+} */
