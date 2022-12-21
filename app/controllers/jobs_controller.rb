@@ -13,7 +13,13 @@ class JobsController < ApplicationController
 
   # GET /jobs/new
   def new
-    @job = Job.new
+    # render the jobs form partial (app/views/jobs/_form.html.erb) to a string
+    html = render_to_string(partial: 'form', locals: { job: Job.new })
+
+    # render cable_car operations which are sent back to the browser as a JSON payload that Mrujs handles.
+    render operations: cable_car
+      .inner_html('#slideover-content', html: html)
+      .text_content('#slideover-header', text: 'Post a new job')
   end
 
   # GET /jobs/1/edit
