@@ -650,6 +650,214 @@ Another way to achieve this is with Stimulus, Turbo Streams, and Turbo Frames. D
 
 Author says CableReady more flexible for complex situations.
 
+```ruby
+# app/controllers/jobs_controller.rb
+def new
+  @job = Job.new
+end
+
+def create
+  @job = Job.new(job_params)
+  @job.account = current_user.account
+  if @job.save
+    render turbo_stream: turbo_stream.prepend(
+      'jobs',
+      partial: 'job',
+      locals: { job: @job }
+    )
+  else
+    render turbo_stream: turbo_stream.replace(
+      'job-form',
+      partial: 'form',
+      locals: { job: @job }
+    ), status: :unprocessable_entity
+  end
+end
+```
+
+**Notes**
+
+* `new` action is simple because will beusing Turbo Frame in the new action to replace slideover content instead of broadcasting CableReady op to update DOM.
+* `create` responds with Turbo Stream `prepend`, similar to CableReady `prepend` operation. Powered by [TurboStreamsTagBuilder](https://github.com/hotwired/turbo-rails/blob/main/app/controllers/turbo/streams/turbo_streams_tag_builder.rb) from `turbo-rails` gem.
+* Turbo Streams support [seven actions](https://turbo.hotwired.dev/reference/streams): prepend, replace, append, update, remove, before, after.
+* Can render multiple Turbo Streams in a single response - can do fancy page updates where multiple different areas of the page are being updated at once.
+
+Explanation of `render turbo_stream:...` code from ChatGPT:
+
+This code is using the render method in Rails to render a partial template called "job" and insert it at the beginning of an element with the ID "jobs" using Turbo Streams.
+
+The render method is used to render a template or partial and return the resulting HTML as a string. In this case, the render method is being called with the turbo_stream option, which tells Rails to use Turbo Streams to update the DOM in real-time.
+
+The prepend method is a method of the TurboStream object that inserts a new element at the beginning of the element with the specified ID. The partial option specifies the name of the partial template to render, and the locals option specifies a hash of local variables that should be available to the partial template. In this case, the job local variable is being passed to the partial template and can be accessed within the template using the job variable.
+
+Overall, this code is using Turbo Streams to insert a new element at the beginning of the "jobs" element, using the rendered HTML from the "job" partial template and passing in the @job instance variable as a local variable to the template. This allows you to update the DOM in real-time and add new elements to the page without needing to refresh the page.
+
+Back to book:
+
+Unlike CableReady, Turbo Stream response cannot dispatch DOM event. Need to update Slideover Stimulus controller to close drawer after form is submitted:
+
+```javascript
+import { Controller } from 'stimulus'
+
+export default class extends Controller {
+  static targets = [ "slideover", "form" ]
+
+  connect() {
+    this.backgroundHtml = this.backgroundHTML()
+    this.visible = false
+  }
+
+  disconnect() {
+    if (this.visible) {
+      this.close()
+    }
+  }
+
+  open() {
+    this.visible = true
+    document.body.insertAdjacentHTML('beforeend', this.backgroundHtml)
+    this.background = document.querySelector(`#slideover-background`)
+    this.toggleSlideover()
+  }
+
+  close() {
+    this.visible = false
+    this.toggleSlideover()
+    if (this.background) {
+      this.background.classList.remove("opacity-100")
+      this.background.classList.add("opacity-0")
+      setTimeout(() => {
+        this.background.remove()
+      }, 500);
+    }
+  }
+
+  toggleSlideover() {
+    this.slideoverTarget.classList.toggle("right-0")
+    this.slideoverTarget.classList.toggle("-right-full")
+    this.slideoverTarget.classList.toggle("lg:-right-1/3")
+  }
+
+  backgroundHTML() {
+    return `<div id="slideover-background" class="fixed top-0 left-0 w-full h-full z-20"></div>`;
+  }
+
+  handleResponse({ detail: { success } }) {
+    if (success) {
+      this.formTarget.reset()
+      this.close()
+    }
+  }
+}
+```
+
+Differences from before:
+
+* Added `form` target
+* Removed event listener from `open` function
+* Added new function `handleResponse`
+* `this.formTarget.reset()` is to avoid flash of old content when creating multiple jobs and closing the slideover
+
+Update slideover partial:
+
+```erb
+<!-- app/views/shared/_slideover.html.erb -->
+<%= turbo_frame_tag(
+  "slideover",
+  data: {
+    slideover_target: "slideover",
+    action: "turbo:submit-end->slideover#handleResponse"
+  },
+  class: "h-screen overflow-y-scroll fixed -right-full lg:-right-1/3 top-0 flex-1 flex flex-col w-full lg:w-1/3 bg-gray-100 transition-all duration-500 z-50"
+) %>
+```
+
+**Notes**
+
+* Slideover partial starts off as an empty `<turbo-frame>` element.
+* When want to use the slideover, will render a view with a matching `turbo-frame id="slideover"`.
+* Turbo will replace content of the slideover frame with updated content from the server
+* `data-action` is listening for the `turbo:submit-end` [event](https://turbo.hotwired.dev/reference/events) (Stimulus not limited to handling just `click` events). When submit-end event is received, will invoke `handleResponse` function in slideover controller which will close the drawer if form was successful.
+
+In order to see the new job form render in the slideover, update the new template:
+
+```erb
+<!-- app/views/jobs/new.html.erb -->
+<%= turbo_frame_tag "slideover" do %>
+  <div class="flex px-6 justify-between items-baseline bg-gray-900">
+    <h3 class="text-xl text-white" id="slideover-header">Add a new job posting</h3>
+    <button data-action="slideover#close" class="flex items-center justify-center h-12 w-12 rounded-full focus:outline-none focus:bg-gray-600 hover:bg-gray-600" aria-label="Close slideover">
+      <%= inline_svg_tag 'close.svg', class: "h-7 w-7 text-white" %>
+    </button>
+  </div>
+  <div class="mt-4 px-4 text-gray-700">
+    <div id="slideover-content">
+      <%= render "form", job: @job %>
+    </div>
+  </div>
+<% end %>
+```
+
+**Notes**
+
+* Above creates a matching `slideover` turo frame, together with full structure of slideover (before this was in the slideover partial).
+* Turbo Frames replaces the entire content of the frame, therefore need the `new job` view to render everything (with CableReady we could do a more targetted replacement).
+
+On jobs index view, update the Post a new job link:
+
+```erb
+<!-- app/views/jobs/index.html.erb -->
+<%= link_to "Post a job",
+new_job_path,
+class: "btn-primary-outline",
+data: {
+  action: "click->slideover#open",
+  turbo_frame: 'slideover'
+} %>
+```
+
+Update job form to set `slideover_target` and remove data-remote. This is how Stimulus can reset the form after successful submission (recall `formTarget.reset()` in slideover controller):
+
+```erb
+<!-- app/views/jobs/_form.html.erb -->
+<%= form_with(
+  model: job,
+  id: 'job-form',
+  html: { class: "space-y-6" },
+  data: {
+    slideover_target: "form"
+  }
+) do |form| %>
+...
+```
+
+**Notes**
+
+* Removed `remote` attribute.
+* Added `turbo_frame` attribute
+* The goal is to have the response to the GET request from `/jobs/new` update the content of the `slideover` turbo frame, need to specify the turbo_frame [target](https://turbo.hotwired.dev/reference/frames#frame-with-overwritten-navigation-targets) on the link.
+* The `turbo_frame` data attribute on the link is how Turbo connects everything.
+
+The `form_with` will render a form element in the DOM as follows:
+
+```html
+<form id="job-form" data-slideover-target="form" action="/jobs" method="post">
+  <!-- ... -->
+</form
+```
+
+ChatGPT on difference between approaches:
+
+```
+Turbo Streams and CableReady with StimulusReflex are both tools that can be used to build interactive, real-time applications in Rails. However, they work in slightly different ways and have different use cases.
+
+Turbo Streams is a feature of Rails 6 that allows you to update the DOM in real-time using a combination of server-side rendering and client-side JavaScript. It works by sending small, incremental updates to the client over a websocket connection, which are then applied to the DOM using JavaScript. Turbo Streams uses a technique called "incremental rendering" to update the DOM efficiently and minimize the amount of data that needs to be transferred over the network.
+
+CableReady with StimulusReflex, on the other hand, is a combination of two libraries that can be used to add real-time, server-side rendering to your Rails application. CableReady is a JavaScript library that allows you to send commands to the server over a websocket connection, while StimulusReflex is a library that adds real-time, server-side rendering capabilities to Stimulus, a JavaScript library for adding interactivity to your application.
+
+In general, Turbo Streams is a more streamlined and efficient way to build real-time applications in Rails, as it is built into the framework and uses incremental rendering to minimize data transfer. CableReady with StimulusReflex is a more flexible and customizable option, but it may require more setup and configuration to get it working.
+```
+
 ## My Questions and Comments
 
 1. Original `forms.css` from Chapter 1 has some syntax errors - space between hover and focus and `:` was causing Tailwind to not compile and breaking site styles. Solution is to remove extra spaces, so `hover:...` instead of `hover :...`

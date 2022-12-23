@@ -2,7 +2,9 @@
   model: job,
   id: 'job-form',
   html: { class: "space-y-6" },
-  data: { remote: true }
+  data: {
+    slideover_target: "form"
+  }
 ) do |form| %>
   <% if job.errors.any? %>
     <div id="error_explanation">

@@ -2,11 +2,7 @@ import { Controller } from "@hotwired/stimulus"
 // import { Controller } from 'stimulus'
 
 export default class extends Controller {
-  // https://stimulus.hotwired.dev/reference/targets
-  // target can be referenced in controller with `this.slideoverTarget`
-  // Targets are DOM elements that we set when we connect a controller to the DOM.
-  // When working with Stimulus, targets are used to obtain a reference to a specific DOM element.
-  static targets = [ "slideover" ]
+  static targets = [ "slideover", "form" ]
 
   connect() {
     this.backgroundHtml = this.backgroundHTML()
@@ -24,11 +20,6 @@ export default class extends Controller {
     document.body.insertAdjacentHTML('beforeend', this.backgroundHtml)
     this.background = document.querySelector(`#slideover-background`)
     this.toggleSlideover()
-
-    // This event listener, submit:success, is how we close the drawer after a successful form submission.
-    document.addEventListener("submit:success", () => {
-      this.close()
-    }, { once: true })
   }
 
   close() {
@@ -51,5 +42,12 @@ export default class extends Controller {
 
   backgroundHTML() {
     return `<div id="slideover-background" class="fixed top-0 left-0 w-full h-full z-20"></div>`;
+  }
+
+  handleResponse({ detail: { success } }) {
+    if (success) {
+      this.formTarget.reset()
+      this.close()
+    }
   }
 }
