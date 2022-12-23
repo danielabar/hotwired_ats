@@ -13,6 +13,8 @@
     - [Creating jobs in a slideover](#creating-jobs-in-a-slideover)
     - [Creating job postings](#creating-job-postings)
     - [Slideover edit links](#slideover-edit-links)
+    - [Deleting jobs](#deleting-jobs)
+    - [Adding jobs with Turbo Streams](#adding-jobs-with-turbo-streams)
   - [My Questions and Comments](#my-questions-and-comments)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -39,6 +41,16 @@ According to ChatGPT on turbo streams:
 The "TURBO_STREAM" format is a way of streaming responses in Rails. It allows the server to send a response to the client in chunks, rather than waiting for the entire response to be generated before sending it. This can be useful for large responses or for responses that take a long time to generate, as it allows the client to start receiving and rendering the response before the entire response has been generated.
 
 The line "Processing by JobsController#create as TURBO_STREAM" indicates that a request is being processed by the create action in the JobsController controller, and that the response will be sent using the "TURBO_STREAM" format.
+```
+
+According to ChatGPT on difference between Stimulus and StimulusReflex:
+
+```
+Stimulus is a JavaScript library for adding interactivity to your web application. It is designed to be lightweight and easy to use, and it allows you to add behaviors to your HTML elements using simple JavaScript classes.
+
+StimulusReflex is an extension of Stimulus that adds real-time, server-side rendering to your application. It uses the ActionCable websocket framework to allow the server to push updates to the client without the need for the client to constantly poll the server for updates. This can be useful for building responsive, interactive applications without the need for complex client-side code.
+
+One key difference between Stimulus and StimulusReflex is that Stimulus is focused on adding client-side behaviors to your application, while StimulusReflex adds real-time, server-side rendering capabilities. This means that Stimulus is primarily used for adding interactions and animations to your application, while StimulusReflex is used for updating the application's state and rendering new content in real-time.
 ```
 
 * [StimulsReflex](https://docs.stimulusreflex.com/): extends capabilities of Rails and [Stimulus](https://stimulus.hotwired.dev/)
@@ -232,6 +244,12 @@ data: {
   action: "click->slideover#open",
   remote: true
 } %>
+```
+
+Looking at the "Post a new job" link in browser, it generated this DOM:
+
+```htm
+<a class="btn-primary-outline" data-action="click->slideover#open" data-remote="true" href="/jobs/new" data-turbo="false">Post a new job</a>
 ```
 
 **Notes**
@@ -544,7 +562,93 @@ Add `#jobs` DOM id to the job container div in jobs index view. This is so the s
 
 ### Slideover edit links
 
-TODO...
+Update edit link in job partial with data-action to tell it to open the slideover, and remote attribute so it will accept CableReady JSON:
+
+```ruby
+# app/views/jobs/_job.html.erb
+<%= link_to job.title,
+edit_job_path(job),
+class: "text-lg text-blue-600 hover:text-blue-700",
+data: {
+  action: "click->slideover#open",
+  remote: true
+} %>
+```
+
+The `edit_job_path` is standard Rails, which will invoke the `edit` method in the jobs controller. Currently the edit method has default Rails behaviour which is to render the view `app/views/jobs/edit.html.erb` in a new page:
+
+```ruby
+# app/controllers/jobs_controller.rb
+# GET /jobs/1/edit
+def edit
+end
+```
+
+Update `edit` method so that it instead uses CableReady operations to update slideover content with rendered job form partial, this time with a job instance so that the form will be pre-populated with that job's details:
+
+```ruby
+# app/controllers/jobs_controller.rb
+def edit
+  html = render_to_string(partial: 'form', locals: { job: @job })
+  render operations: cable_car
+    .inner_html('#slideover-content', html: html)
+    .text_content('#slideover-header', text: 'Update job')
+end
+```
+
+Note that `@job` instance var is populated in controller's `before_action`.
+
+Also need to update the `update` method in controller to [replace](https://cableready.stimulusreflex.com/reference/operations/dom-mutations#replace) the current job in the DOM. Note use of `dom_id(@job)` to select the correct DOM element to be replaced:
+
+```ruby
+# app/controllers/jobs_controller.rb
+def update
+  if @job.update(job_params)
+    html = render_to_string(partial: 'job', locals: { job: @job })
+    render operations: cable_car
+      .replace(dom_id(@job), html: html)
+      .dispatch_event(name: 'submit:success')
+  else
+    html = render_to_string(partial: 'form', locals: { job: @job })
+    render operations: cable_car
+      .inner_html('#job-form', html: html), status: :unprocessable_entity
+  end
+end
+```
+
+### Deleting jobs
+
+Update delete link in job partial  to add `remote` attribute to make it accept/receive CableReady JSON. No need for `data-action` because we don't need to open/close slideover drawer for delete action:
+
+```erb
+<!-- app/views/jobs/_job.html.erb -->
+<%= button_to "Delete job",
+job_path(job),
+method: :delete,
+class: "btn border border-red-200 hover:bg-red-100 text-sm text-red-700",
+remote: true,
+data: {
+  confirm: "Are you sure?"
+} %>
+```
+
+Calling clicking button to `job_path` with `method: :delete` invokes `destroy` method in jobs controller. Update this method to render CableReady [remove](https://cableready.stimulusreflex.com/reference/operations/dom-mutations#remove) operation to remove the DOM element identified by `dom_id(@job)`:
+
+```ruby
+# app/controllers/jobs_controller.rb
+def destroy
+  @job.destroy
+  render operations: cable_car.remove(selector: dom_id(@job))
+end
+```
+
+### Adding jobs with Turbo Streams
+
+So far, have used Stimulus/StimulusReflex, CableReady and Mrujs to open/close slideover, populate it with content and process form submissions.
+
+Another way to achieve this is with Stimulus, Turbo Streams, and Turbo Frames. Do this in a separate branch...
+
+Author says CableReady more flexible for complex situations.
 
 ## My Questions and Comments
 
