@@ -1,3 +1,22 @@
+<!-- START doctoc generated TOC please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+**Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
+
+- [README](#readme)
+  - [References](#references)
+  - [Chapter 1: Setup](#chapter-1-setup)
+  - [Chapter 2](#chapter-2)
+    - [Devise](#devise)
+    - [Tailwind](#tailwind)
+    - [Stimulus](#stimulus)
+  - [Chapter 3: Job Postings](#chapter-3-job-postings)
+    - [Creating jobs in a slideover](#creating-jobs-in-a-slideover)
+    - [Creating job postings](#creating-job-postings)
+    - [Slideover edit links](#slideover-edit-links)
+  - [My Questions and Comments](#my-questions-and-comments)
+
+<!-- END doctoc generated TOC please keep comment here to allow auto update -->
+
 # README
 
 Learning Rails with the Hotwire stack, CableReady, and StimulusReflex with [this book](https://book.hotwiringrails.com/chapters). Github [repo](https://github.com/DavidColby/hotwired_ats_code).
@@ -11,6 +30,16 @@ bin/dev
 ## References
 
 TODO: Go back over Chapter 1 and list every part of tech stack and what it's used for.
+
+TODO: All form POST requests are automatically having header set `Accept: text/vnd.turbo-stream.html, text/html, application/xhtml+xml`, which makes Rails controller process request as turbo stream, eg: `Processing by JobsController#create as TURBO_STREAM`. Where is this configured to do so?
+
+According to ChatGPT on turbo streams:
+
+```
+The "TURBO_STREAM" format is a way of streaming responses in Rails. It allows the server to send a response to the client in chunks, rather than waiting for the entire response to be generated before sending it. This can be useful for large responses or for responses that take a long time to generate, as it allows the client to start receiving and rendering the response before the entire response has been generated.
+
+The line "Processing by JobsController#create as TURBO_STREAM" indicates that a request is being processed by the create action in the JobsController controller, and that the response will be sent using the "TURBO_STREAM" format.
+```
 
 * [StimulsReflex](https://docs.stimulusreflex.com/): extends capabilities of Rails and [Stimulus](https://stimulus.hotwired.dev/)
 * [Mrujs](https://mrujs.com/)
@@ -209,6 +238,7 @@ data: {
 
 * `data-action` tells Stimulus to fire `slideover#open` when the link is clicked.
 * `data-remote` indicates that the link should be handled by [Mrujs' CableCar plugin](https://mrujs.com/how-tos/integrate-cablecar#examples). This means the link will expect CableCar JSON returned.
+* Clicking the link will still invoke an http GET request to `new_job_path` on the Rails server. We're going to modify the new method in jobs controller to return the CableCar JSON expected by Mrujs.
 
 Need to update `new` method in jobs controller to respond with expected JSON for CableCar.
 
@@ -249,6 +279,10 @@ end
 * Mrujs receives that response in the browser, then calls `cableReady.perform` which applies the operations sent from the server, no WebSockets required.
 * CableReady has many operations but we're going to be using it to add, remove, and update DOM elements, as well as update data attributes in response to user actions.
 
+Just for fun, here' is ChatGPT's explanation of the controller code:
+
+![cable car ops chatgpt](doc-images/cable-car-ops-chatgpt.png "cable car ops chatgpt")
+
 In order to render `cable_car` operations from a Rails controller, need to include `CableReady::Broadcaster` in controller. But we're going to be doing this throughout app, so put it in main application controller:
 
 ```ruby
@@ -264,6 +298,254 @@ Left at "we can pause here to test that the slideover works as expected"
 
 TODO: Paste in request as shown in Rails server and HTTP JSON response from browser dev tools.
 
+Try the slideover from `http://localhost:3000/jobs` and click Post a job:
+
+Browser submits GET request to Rails server. Notice `accept` header of `vnd.cable-ready.json`:
+
+```
+curl 'http://localhost:3000/jobs/new' \
+-H 'Accept-Language: en-US,en;q=0.9' \
+-H 'Connection: keep-alive' \
+-H 'Cookie: __profilin=p%3Dt; _news_session=dma9Qz...' \
+-H 'If-None-Match: W/"e70b236c3da9e7b86af8c229f9926147"' \
+-H 'Referer: http://localhost:3000/jobs' \
+-H 'Sec-Fetch-Dest: empty' \
+-H 'Sec-Fetch-Mode: cors' \
+-H 'Sec-Fetch-Site: same-origin' \
+-H 'User-Agent: Mozilla...' \
+-H 'accept: application/vnd.cable-ready.json, */*' \
+-H 'x-requested-with: XmlHttpRequest' \
+--compressed
+```
+
+Here's what it looks like when received on Rails server:
+
+```
+Started GET "/jobs/new" for ::1 at 2022-12-23 06:49:27 -0500
+Processing by JobsController#new as CABLE_READY
+User Load (9.0ms)  SELECT "users".* FROM "users" WHERE "users"."id" = ? ORDER BY "users"."id" ASC LIMIT ?  [["id", 1], ["LIMIT", 1]]
+Rendered jobs/_form.html.erb (Duration: 91.7ms | Allocations: 6660)
+Completed 200 OK in 225ms (Views: 1.9ms | ActiveRecord: 9.0ms | Allocations: 9432)
+```
+
+Here is the response received by browser from `http://localhost:3000/jobs/new`. Notice the content type of `vnd.cable-ready.json`
+
+```
+HTTP/1.1 200 OK
+X-Frame-Options: SAMEORIGIN
+X-XSS-Protection: 0
+X-Content-Type-Options: nosniff
+X-Download-Options: noopen
+X-Permitted-Cross-Domain-Policies: none
+Referrer-Policy: strict-origin-when-cross-origin
+Content-Type: application/vnd.cable-ready.json; charset=utf-8
+Vary: Accept
+ETag: W/"e401f9d2a671c74860b85d83faa029eb"
+Cache-Control: max-age=0, private, must-revalidate
+Set-Cookie: _hotwired_ats_session=pGXVC9...; path=/; HttpOnly; SameSite=Lax
+X-Request-Id: ebc73e4c-9d90-4b54-ab26-ec9864bed4e0
+X-Runtime: 0.330878
+Server-Timing: start_processing.action_controller;dur=0.56, sql.active_record;dur=37.23, instantiation.active_record;dur=1.02, render_partial.action_view;dur=91.96, process_action.action_controller;dur=225.21
+Transfer-Encoding: chunked
+
+
+[
+    {
+        "html": "<form action=\"/jobs\" accept-charset=\"UTF-8\" method=\"post\"><input type=\"hidden\" name=\"authenticity_token\" value=\"jaUH2AtxVN0dPnhRthfE9moJXYDEWLxBGqjF9hmMHB_MVDFCT7NbLnXrnarlRTapGO5_cx_7zRBj9qaTTi9EoQ\" autocomplete=\"off\" />\n\n  <div>\n    <label style=\"display: block\" for=\"job_title\">Title</label>\n    <input type=\"text\" name=\"job[title]\" id=\"job_title\" />\n  </div>\n\n  <div>\n    <label style=\"display: block\" for=\"job_status\">Status</label>\n    <input type=\"text\" value=\"open\" name=\"job[status]\" id=\"job_status\" />\n  </div>\n\n  <div>\n    <label style=\"display: block\" for=\"job_job_type\">Job type</label>\n    <input type=\"text\" value=\"full_time\" name=\"job[job_type]\" id=\"job_job_type\" />\n  </div>\n\n  <div>\n    <label style=\"display: block\" for=\"job_location\">Location</label>\n    <input type=\"text\" name=\"job[location]\" id=\"job_location\" />\n  </div>\n\n  <div>\n    <label style=\"display: block\" for=\"job_account_id\">Account</label>\n    <input type=\"text\" name=\"job[account_id]\" id=\"job_account_id\" />\n  </div>\n\n  <div>\n    <input type=\"submit\" name=\"commit\" value=\"Create Job\" data-disable-with=\"Create Job\" />\n  </div>\n</form>",
+        "selector": "#slideover-content",
+        "operation": "innerHtml"
+    },
+    {
+        "text": "Post a new job",
+        "selector": "#slideover-header",
+        "operation": "textContent"
+    }
+]
+```
+
+Notice the response includes two operations: `innerHtml` and `textContent`. This is because of our code in jobs controller new method:
+
+```ruby
+render operations: cable_car
+  .inner_html('#slideover-content', html: html)
+  .text_content('#slideover-header', text: 'Post a new job')
+```
+
+So the `innerHtml` operation is used to set the inner html of `#slideover-content` with the rendered form partial.
+
+And the `textContent` operation is used to set the text content of `#slideover-header` with text "Post a new job".
+
+Let's make the form partial have human readable dropdown values for status and job type. Notice that job description is using the Trix editor for the rich text area:
+
+```erb
+<%= form_with(model: job, html: { class: "space-y-6" }) do |form| %>
+  <% if job.errors.any? %>
+    <div id="error_explanation">
+      <h2><%= pluralize(job.errors.count, "error") %> prohibited this job from being saved:</h2>
+
+      <ul>
+        <% job.errors.each do |error| %>
+          <li><%= error.full_message %></li>
+        <% end %>
+      </ul>
+    </div>
+  <% end %>
+
+  <div class="form-group">
+    <%= form.label :title %>
+    <div class="mt-1">
+      <%= form.text_field :title %>
+    </div>
+  </div>
+
+  <div class="form-group">
+    <%= form.rich_text_area :description %>
+  </div>
+
+  <div class="form-group">
+    <%= form.label :status %>
+    <%= form.select :status, options_for_select(Job.statuses.map{|key, _value| [key.humanize, key]}, job.status), {}, { class: "mt-1" } %>
+  </div>
+
+  <div class="form-group">
+    <%= form.label :job_type %>
+    <%= form.select :job_type, options_for_select(Job.job_types.map{|key, _value| [key.humanize, key]}, job.job_type), {}, { class: "mt-1" } %>
+  </div>
+
+  <div class="form-group">
+    <%= form.label :location %>
+    <div class="mt-1">
+      <%= form.text_field :location %>
+    </div>
+  </div>
+
+  <%= form.submit 'Submit', class: 'btn-primary float-right' %>
+<% end %>
+```
+
+To make the trix editor look better, modified `app/assets/stylesheets/actiontext.css` as follows:
+
+```css
+@import "trix/dist/trix";
+
+.trix-button--icon-increase-nesting-level,
+.trix-button--icon-decrease-nesting-level,
+.trix-button--icon-strike,
+.trix-button--icon-code,
+.trix-button-group.trix-button-group--file-tools {
+  display: none;
+}
+
+trix-editor.trix-content {
+  @apply appearance-none w-full max-w-prose bg-white text-gray-700 border-gray-200 rounded-sm text-lg focus:ring-1 focus:ring-blue-300 focus:border-blue-300;
+  min-height: 400px;
+}
+```
+
+Currently when the Job form is submitted from open slideover, user redirected to new page `http://localhost:3000/jobs/2`. This is because clicking Submit button from `app/views/jobs/_form.html.erb` submits http POST to `/jobs` endpoint which is handled by `JobsController#create` which redirects to the newly created job show page if the save is successful:
+
+```ruby
+# app/controllers/jobs_controller.rb
+def create
+  @job = Job.new(job_params)
+  @job.account = current_user.account
+
+  respond_to do |format|
+    if @job.save
+      format.html { redirect_to job_url(@job), notice: "Job was successfully created." }
+      format.json { render :show, status: :created, location: @job }
+    else
+      format.html { render :new, status: :unprocessable_entity }
+      format.json { render json: @job.errors, status: :unprocessable_entity }
+    end
+  end
+end
+```
+
+### Creating job postings
+
+Let's update things so the user remains on the jobs index page `http://localhost:3000/jobs` that shows all jobs, but with an updated listing so the newly created job gets added to the list, *without* a full page refresh.
+
+Solution will be to use CableReady to close the slideover, and insert new job into existing list of jobs.
+
+Update `create` method in jobs controller to render CableReady operations:
+
+```ruby
+def create
+  @job = Job.new(job_params)
+  @job.account = current_user.account
+  if @job.save
+    html = render_to_string(partial: 'job', locals: { job: @job })
+    render operations: cable_car
+      .prepend('#jobs', html: html)
+      .dispatch_event(name: 'submit:success')
+  else
+    html = render_to_string(partial: 'form', locals: { job: @job })
+    render operations: cable_car
+      .inner_html('#job-form', html: html), status: :unprocessable_entity
+  end
+end
+```
+
+For the success case:
+* Render the `app/views/jobs/_job.html.erb` partial and [prepend](https://developer.mozilla.org/en-US/docs/Web/API/Element/prepend) it to DOM element `#jobs` (where is this defined?).
+* Also [dispatch a custom DOM event](https://cableready.stimulusreflex.com/reference/operations/event-dispatch#dispatch_event) `submit:success` which will be used by the slideover controller to close itself.
+
+Recall the `open` function in the slideover controller (stimulus), listens for this event to close itself:
+
+```javascript
+// app/javascript/controllers/slideover_controller.js
+open() {
+  this.visible = true
+  document.body.insertAdjacentHTML('beforeend', this.backgroundHtml)
+  this.background = document.querySelector(`#slideover-background`)
+  this.toggleSlideover()
+
+  // This event listener, submit:success, is how we close the drawer after a successful form submission.
+  document.addEventListener("submit:success", () => {
+    this.close()
+  }, { once: true })
+}
+```
+
+Note that it's also possible to do this (server broadcasts event to be handled by client side javascript controller) with TurboStreams but its easier and more flexible to do with CableReady.
+
+For failure case, we re-render the job form partial `app/views/jobs/_form.html.erb` with the job instance, which will now contain model errors, which will be displayed in forms. Then replace inner html of the `#job-form` DOM element with this partial, also sending http status `:unprocessable_entity`.
+
+Also in order to process the rich text job field `description`, add it to allowed params in jobs controller:
+
+```ruby
+# app/controllers/jobs_controller.rb
+def job_params
+  params.require(:job).permit(:title, :status, :job_type, :location, :account_id, :description)
+end
+```
+
+Update job form partial to add `data-remote` attribute (as we did earlier on new job link), and also specify `job-form` as the ID of the form element. This DOM id is needed for the job create error case to render: `.inner_html('#job-form', html: html), status: :unprocessable_entity`:
+
+```erb
+<!-- app/views/jobs/_form.html.erb -->
+<%= form_with(
+  model: job,
+  id: 'job-form',
+  html: { class: "space-y-6" },
+  data: { remote: true }
+) do |form| %>
+<!-- ... rest of form ... -->
+```
+
+Add `#jobs` DOM id to the job container div in jobs index view. This is so the success case will be able to prepend a job job to the list `.prepend('#jobs', html: html)`:
+
+```erb
+<div class="divide-y divide-gray-200" id="jobs">
+  <%= render @jobs %>
+</div>
+```
+
+### Slideover edit links
+
+TODO...
+
 ## My Questions and Comments
 
 1. Original `forms.css` from Chapter 1 has some syntax errors - space between hover and focus and `:` was causing Tailwind to not compile and breaking site styles. Solution is to remove extra spaces, so `hover:...` instead of `hover :...`
@@ -273,4 +555,8 @@ TODO: Paste in request as shown in Rails server and HTTP JSON response from brow
    1. Could this cause confusion when any template or partial anywhere in the app could reference functions in the slideover controller but any developer that didn't add the global might not know where this is defined?
    2. Could this cause the slideover controller to become a "dumping ground" for any other js functions that need to get executed anywhere in the app?
 6. The slideover Stimuls controller `app/javascript/controllers/slideover_controller.js` has a function `backgroundHTML` that returns some markup. Is this considered good practice to mix logic and markup in a Stimulus controller? i.e. what should be the concerns of a Stimuls controller?
-7. Seeing error in Rails server output `ActionController::RoutingError (No route matches [GET] "/assets/application.js-2f5ffb65c42075102a7a135fbe646944950943ded66c4ae0aeebbf43ff329d26.map"):`
+7. Seeing error in Rails server output `ActionController::RoutingError (No route matches [GET] "/assets/application.js-2f5ffb65c42075102a7a135fbe646944950943ded66c4ae0aeebbf43ff329d26.map")`. Missing source map?
+8. Seeing warning in build/dev output when added animation css `No utilities were generated there is likely a problem with the `content` key in the tailwind config. For more information see the documentation: https://tailwindcss.com/docs/content-configuration`
+9. When rendering a CableCar JSON response from a Rails controller such as `.inner_html('#slideover-content', html: html)`, what's the scope of the DOM that will be searched for finding the given selector? i.e. will it match the first `#slideover-content` found *anywhere* in the DOM? Or only the element that is located within the partial `app/views/shared/_slideover.html.erb`? The CableReady doc for [inner_html](https://cableready.stimulusreflex.com/reference/operations/dom-mutations#inner_html) doesn't explain or even have a DOM selector.
+   1. Maybe this is the answer from CableReady [usage](https://cableready.stimulusreflex.com/usage): "By default, the selector option provided to DOM-mutating operations expects a CSS selector that resolves to one single DOM element. If multiple elements are returned, only the first one is used."
+   2. If it's not scoped to the partial, this could get tricky as the project grows, another developer working on a different feature may add a DOM element by chance that has the same name, and then the wrong element would get updated, breaking this feature.
