@@ -3,10 +3,15 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [README](#readme)
-  - [References](#references)
-  - [Chapter 1: Setup](#chapter-1-setup)
+  - [Chapter 1](#chapter-1)
+    - [The Stack](#the-stack)
+    - [Creating a Rails application with rails new](#creating-a-rails-application-with-rails-new)
+    - [Configure Tailwind](#configure-tailwind)
+    - [Update esbuild config](#update-esbuild-config)
+    - [Update bin/dev Scripts](#update-bindev-scripts)
+    - [Install CableReady, StimulusReflex, and Mrujs](#install-cableready-stimulusreflex-and-mrujs)
   - [Chapter 2](#chapter-2)
-    - [Devise](#devise)
+    - [Users and accounts with Devise](#users-and-accounts-with-devise)
     - [Tailwind](#tailwind)
     - [Stimulus](#stimulus)
   - [Chapter 3: Job Postings](#chapter-3-job-postings)
@@ -29,43 +34,201 @@ bin/rails db:create
 bin/dev
 ```
 
-## References
+## Chapter 1
 
-TODO: Go back over Chapter 1 and list every part of tech stack and what it's used for.
+### The Stack
 
-TODO: All form POST requests are automatically having header set `Accept: text/vnd.turbo-stream.html, text/html, application/xhtml+xml`, which makes Rails controller process request as turbo stream, eg: `Processing by JobsController#create as TURBO_STREAM`. Where is this configured to do so?
+* [esbuild](https://esbuild.github.io/) for bundling JS. Will configure to auto refresh browser as changes are made to any JS or CSS.
+  * [chokidar](https://github.com/paulmillr/chokidar) Minimal and efficient cross-platform file watching library.
+* [Tailwind](https://tailwindcss.com/) and postcss for styling.
+  * [postcss-import](https://www.npmjs.com/package/postcss-import) npm/yarn module, PostCSS plugin to transform @import rules by inlining content.
+  * [tailwindcss-forms](https://github.com/tailwindlabs/tailwindcss-forms) Tailwind plugin that provides a basic reset for form styles that makes form elements easy to override with utilities.
+* [Hotwire stack](https://hotwired.dev/) for faster page loads:
+  * [Turbo Drive](https://turbo.hotwired.dev/handbook/drive) watches for link clicks and form submissions and performs them in the background, then updates the page without doing a full reload. Evolution of `turbolinks` gem.
+  * [Turbo Frames](https://turbo.hotwired.dev/handbook/frames) for partial page updates. Any links and forms inside a frame are captured, and the frame contents automatically updated after receiving a response. Regardless of whether the server provides a full document, or just a fragment containing an updated version of the requested frame, only that particular frame will be extracted from the response to replace the existing content
+  * [Turbo Streams](https://turbo.hotwired.dev/handbook/streams) for reactive page updates. Delivers page changes as fragments of HTML wrapped in self-executing `<turbo-stream>` elements. Each stream element specifies an action together with a target ID to declare what should happen to the HTML inside it. These elements are delivered by the server over a WebSocket, [SSE](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events) or other transport to bring the application alive with updates made by other users or processes.
+  * [Stimulus](https://stimulus.hotwired.dev/handbook/introduction) for front end interactivity. Enhances static or server-rendered HTML—the “HTML you already have”—by connecting JavaScript objects to elements on the page using simple annotations.
+* [CableReady](https://cableready.stimulusreflex.com/) further server-powered frontend interactivity and reactive page updates. Triggers client-side DOM changes, events and notifications over ActionCable web sockets. These commands are called [operations](https://cableready.stimulusreflex.com/reference/operations). CableReady is the primary dependency powering StimulusReflex (see below). Establishes a standard for programmatically updating browser state with no need for custom JavaScript.
+* [StimulusReflex](https://docs.stimulusreflex.com/) works together with CableReady. Extends the capabilities of both Rails and Stimulus by intercepting user interactions and passing them to Rails over real-time websockets. These interactions are processed by Reflex actions that change application state. The current page is quickly re-rendered and the changes are sent to the client using CableReady. The page is then [morphed](https://github.com/patrick-steele-idem/morphdom) to reflect the new application state. This entire round-trip allows us to update the UI in 20-30ms without flicker or expensive page loads.
+* [mrujs](https://mrujs.com/) Sprinkle interactivity into your HTML elements using data attributes. A replacement for `@rails/ujs`, which used to ship by default with Rails 6 but has since been deprecated.
+* [CableCar](https://cableready.stimulusreflex.com/v/v5/cable-car) An Mrujs [plugin](https://mrujs.com/how-tos/integrate-cablecar) for use with CableReady's JSON serializer. CableReady was originally created to only work over ActionCable (aka websockets). With CableCar, operation queueing can also work over Ajax.
+
+All form POST requests are automatically having header set `Accept: text/vnd.turbo-stream.html, text/html, application/xhtml+xml`, which makes Rails controller process request as turbo stream, eg: `Processing by JobsController#create as TURBO_STREAM`. Where is this configured to do so?
 
 According to ChatGPT on turbo streams:
 
-```
-The "TURBO_STREAM" format is a way of streaming responses in Rails. It allows the server to send a response to the client in chunks, rather than waiting for the entire response to be generated before sending it. This can be useful for large responses or for responses that take a long time to generate, as it allows the client to start receiving and rendering the response before the entire response has been generated.
+> The "TURBO_STREAM" format is a way of streaming responses in Rails. It allows the server to send a response to the client in chunks, rather than waiting for the entire response to be generated before sending it. This can be useful for large responses or for responses that take a long time to generate, as it allows the client to start receiving and rendering the response before the entire response has been generated.
 
-The line "Processing by JobsController#create as TURBO_STREAM" indicates that a request is being processed by the create action in the JobsController controller, and that the response will be sent using the "TURBO_STREAM" format.
-```
+> The line "Processing by JobsController#create as TURBO_STREAM" indicates that a request is being processed by the create action in the JobsController controller, and that the response will be sent using the "TURBO_STREAM" format.
 
 According to ChatGPT on difference between Stimulus and StimulusReflex:
 
+> Stimulus is a JavaScript library for adding interactivity to your web application. It is designed to be lightweight and easy to use, and it allows you to add behaviors to your HTML elements using simple JavaScript classes.
+
+> StimulusReflex is an extension of Stimulus that adds real-time, server-side rendering to your application. It uses the ActionCable websocket framework to allow the server to push updates to the client without the need for the client to constantly poll the server for updates. This can be useful for building responsive, interactive applications without the need for complex client-side code.
+
+> One key difference between Stimulus and StimulusReflex is that Stimulus is focused on adding client-side behaviors to your application, while StimulusReflex adds real-time, server-side rendering capabilities. This means that Stimulus is primarily used for adding interactions and animations to your application, while StimulusReflex is used for updating the application's state and rendering new content in real-time.
+
+### Creating a Rails application with rails new
+
+Specify tailwind for css and esbuild for javascript handling. `-T` skips tests as we won't be focusing on that in this book:
+
 ```
-Stimulus is a JavaScript library for adding interactivity to your web application. It is designed to be lightweight and easy to use, and it allows you to add behaviors to your HTML elements using simple JavaScript classes.
-
-StimulusReflex is an extension of Stimulus that adds real-time, server-side rendering to your application. It uses the ActionCable websocket framework to allow the server to push updates to the client without the need for the client to constantly poll the server for updates. This can be useful for building responsive, interactive applications without the need for complex client-side code.
-
-One key difference between Stimulus and StimulusReflex is that Stimulus is focused on adding client-side behaviors to your application, while StimulusReflex adds real-time, server-side rendering capabilities. This means that Stimulus is primarily used for adding interactions and animations to your application, while StimulusReflex is used for updating the application's state and rendering new content in real-time.
+rails new hotwired_ats -T --css=tailwind --javascript=esbuild
+cd hotwired_ats
+rails db:create
 ```
 
-* [StimulsReflex](https://docs.stimulusreflex.com/): extends capabilities of Rails and [Stimulus](https://stimulus.hotwired.dev/)
-* [Mrujs](https://mrujs.com/)
-  * [CableCar Plugin for Mrujs](https://mrujs.com/how-tos/integrate-cablecar) to make it easier to work with CableReady?
-* [CableReady](https://cableready.stimulusreflex.com/)
-  * [CableReady Operations](https://cableready.stimulusreflex.com/reference/operations)
+### Configure Tailwind
 
-## Chapter 1: Setup
+[cssbundling-rails](https://github.com/rails/cssbundling-rails) gem doesn't support importing other css files into [app/assets/stylesheets/application.tailwind.css](app/assets/stylesheets/application.tailwind.css). Fix with some additional install and config:
 
-Note project is using [Mrujs](https://mrujs.com/). Mrujs is intended as a direct replacement for `@rails/ujs`, which used to ship by default with Rails 6 but has since been deprecated.
+```
+yarn add postcss-import
+touch postcss.config.js
+```
+
+```javascript
+// postcss.config.js
+module.exports = {
+  plugins: [
+    require('postcss-import'),
+    require('tailwindcss'),
+    require('autoprefixer')
+  ]
+}
+```
+
+```css
+/* app/assets/stylesheets/application.tailwind.css */
+@import "tailwindcss/base";
+@import "tailwindcss/components";
+@import "tailwindcss/utilities";
+```
+
+### Update esbuild config
+
+[jsbundling-rails]([https://github.com/rails/jsbundling-rails]) gem sets up extremely simple esbuild config, but will almost always need to customize it.
+
+Our custom config should do the following:
+
+* Enable source maps in dev and prod.
+* Minify bundle in prod.
+* Auto rebuild/refresh page when assets and view files change.
+
+Install [chokidar](https://github.com/paulmillr/chokidar) for file watching and auto refresh, then configure esbuild:
+
+```
+yarn add chokidar -D
+touch esbuild.config.js
+```
+
+```javascript
+// esbuild.config.js
+#!/usr/bin/env node
+
+const esbuild = require('esbuild')
+const path = require('path')
+
+// Add more entrypoints, if needed
+const entryPoints = [
+  "application.js",
+]
+const watchDirectories = [
+  "./app/javascript/**/*.js",
+  "./app/views/**/*.html.erb",
+  "./app/assets/stylesheets/*.css",
+  "./app/assets/stylesheets/*.scss"
+]
+
+const config = {
+  absWorkingDir: path.join(process.cwd(), "app/javascript"),
+  bundle: true,
+  entryPoints: entryPoints,
+  outdir: path.join(process.cwd(), "app/assets/builds"),
+  sourcemap: true
+}
+
+async function rebuild() {
+const chokidar = require('chokidar')
+const http = require('http')
+const clients = []
+
+http.createServer((req, res) => {
+  return clients.push(
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "Access-Control-Allow-Origin": "*",
+      Connection: "keep-alive",
+    }),
+  );
+}).listen(8082);
+
+let result = await esbuild.build({
+  ...config,
+  incremental: true,
+  banner: {
+    js: ' (() => new EventSource("http://localhost:8082").onmessage = () => location.reload())();',
+  },
+})
+
+chokidar.watch(watchDirectories).on('all', (event, path) => {
+  if (path.includes("javascript")) {
+    result.rebuild()
+  }
+  clients.forEach((res) => res.write('data: update\n\n'))
+  clients.length = 0
+});
+}
+
+if (process.argv.includes("--rebuild")) {
+  rebuild()
+} else {
+  esbuild.build({
+    ...config,
+    minify: process.env.RAILS_ENV == "production",
+  }).catch(() => process.exit(1));
+}
+```
+
+**Notes**
+
+* `reload` function creates a web server listening on 8082 and builds JS with esbuild and uses [banner](https://esbuild.github.io/api/#banner) option.
+* banner option inserts JS into the built file that opens an [EventSource](https://developer.mozilla.org/en-US/docs/Web/API/EventSource) connection to server on 8082 and fires `reload` each time message is received.
+* chokidar watches directories containing our custom js, css and erb, then broadcasts a message to EventSource server, which triggers `reload()` on browser and tells esbuild to rebuild JS (if change was detected in any JS files)
+* rebuild used for dev, `esbuild.build()` used for prod.
+
+### Update bin/dev Scripts
+
+Update scripts in package.json that are called from `yarn` cli (but we never have to call this manually):
+
+```json
+// package.json
+"scripts": {
+  "build": "node esbuild.config.js",
+  "build:css": "tailwindcss --postcss -i ./app/assets/stylesheets/application.tailwind.css -o ./app/assets/builds/application.css"
+},
+```
+
+Rails ships with `bin/dev` script that calls `Procfile.dev`. To change behaviour of bin/dev, edit the procfile:
+
+```
+<!-- Procfile.dev -->
+web: bin/rails server -p 3000
+js: yarn build --rebuild
+css: yarn build:css --watch
+```
+
+### Install CableReady, StimulusReflex, and Mrujs
+
+...
 
 ## Chapter 2
 
-### Devise
+### Users and accounts with Devise
+
+Temporarily using fork of devise at 'DavidColby/devise' because Devise and Turbo-enabled Rails 7 not yet working together.
 
 test1@example.com/123456
 
@@ -80,11 +243,7 @@ bin/rails g devise:controllers users -c=sessions
 
 ### Tailwind
 
-Added a bunch of Tailwind stuff that isn't working, despite downgrading to same version as author's in `package.json`.
-
-Had to comment out: `app/assets/stylesheets/forms.css`
-
-Actually: Remove spaces between `hover` and `focus` and `:` fixes compilation errors.
+Remove spaces between `hover` and `focus` and `:` fixes compilation errors.
 
 ### Stimulus
 
@@ -95,6 +254,18 @@ Actually: Remove spaces between `hover` and `focus` and `:` fixes compilation er
 > Stimulus is a JavaScript framework with modest ambitions. Unlike other front-end frameworks, Stimulus is designed to enhance static or server-rendered HTML—the “HTML you already have”—by connecting JavaScript objects to elements on the page using simple annotations.
 
 Use Stimulus to display toast messages in the Rails `flash` hash.
+
+To generate a stimulus controller:
+
+```
+rails g stimuls alert
+```
+
+Creates file in `app/javascript/controllers` and runs `stimulus:manifest:update` to register the new controller in `app/javascript/controllers/index.js`.
+
+Stimulus has [lifecycle callbacks](https://stimulus.hotwired.dev/reference/lifecycle-callbacks). We'll use:
+* `initialize` Called when associated element first enters the DOM
+* `connect` Caalled every time associated element enters the DOM
 
 See `app/javascript/controllers/alert_controller.js`. This gets connected to DOM in `app/views/shared/_flash.html.erb`
 
@@ -664,3 +835,4 @@ Author says CableReady more flexible for complex situations.
 9. When rendering a CableCar JSON response from a Rails controller such as `.inner_html('#slideover-content', html: html)`, what's the scope of the DOM that will be searched for finding the given selector? i.e. will it match the first `#slideover-content` found *anywhere* in the DOM? Or only the element that is located within the partial `app/views/shared/_slideover.html.erb`? The CableReady doc for [inner_html](https://cableready.stimulusreflex.com/reference/operations/dom-mutations#inner_html) doesn't explain or even have a DOM selector.
    1. Maybe this is the answer from CableReady [usage](https://cableready.stimulusreflex.com/usage): "By default, the selector option provided to DOM-mutating operations expects a CSS selector that resolves to one single DOM element. If multiple elements are returned, only the first one is used."
    2. If it's not scoped to the partial, this could get tricky as the project grows, another developer working on a different feature may add a DOM element by chance that has the same name, and then the wrong element would get updated, breaking this feature.
+10. How to debug/step through js in Stimulus controller?
