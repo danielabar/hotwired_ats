@@ -26,6 +26,7 @@ export default class extends Controller {
     this.toggleSlideover()
 
     // This event listener, submit:success, is how we close the drawer after a successful form submission.
+    // See various Rails controllers that invoke CableReady `dispatch_event` operation.
     document.addEventListener("submit:success", () => {
       this.close()
     }, { once: true })

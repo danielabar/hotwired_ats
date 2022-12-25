@@ -20,6 +20,12 @@
     - [Slideover edit links](#slideover-edit-links)
     - [Deleting jobs](#deleting-jobs)
     - [Adding jobs with Turbo Streams](#adding-jobs-with-turbo-streams)
+  - [Chapter 4: Creatingand moving applicants](#chapter-4-creatingand-moving-applicants)
+    - [Build applicant resource](#build-applicant-resource)
+    - [Create applicants](#create-applicants)
+    - [ActiveStorage resumes](#activestorage-resumes)
+      - [Performance](#performance)
+    - [Drag applicants between stages](#drag-applicants-between-stages)
   - [My Questions and Comments](#my-questions-and-comments)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -821,6 +827,275 @@ Another way to achieve this is with Stimulus, Turbo Streams, and Turbo Frames. D
 
 Author says CableReady more flexible for complex situations.
 
+## Chapter 4: Creatingand moving applicants
+
+Will introduce an `Applicants` resource representing people that are applying for job postings. Will create a Kanban board with applicants grouped by hiring stage, and an admin can drag and drop applicants between stages.
+
+### Build applicant resource
+
+```
+bin/rails g scaffold Applicant first_name:string last_name:string email:string:index phone:string stage:string:index status:string:index job:references
+bin/rails db:migrate
+```
+
+Update applicant model with enum definitions, validations and name helper method. Note in a real app, the hiring stages would be in a table, not static enum values, so that each company using the ATS could customize for their own hiring process.
+
+Also note that an applicant can only apply to one job with this model.
+
+Update job model to indicate it has many applicants.
+
+Add link to applicants index page to authenticated nav bar.
+
+Fill in basic kanban layout in applicants index view. Loop over groups of applicants based on hiring stage and render each applicant in a card.
+
+```erb
+<!-- app/views/applicants/index.html.erb -->
+<div class="flex items-baseline justify-between mb-6">
+  <h2 class="mt-6 text-3xl font-extrabold text-gray-700">
+    Applicants
+  </h2>
+  <%= link_to "Add a new applicant", new_applicant_path, class: "btn-primary-outline", data: { action: "click->slideover#open", remote: true } %>
+</div>
+<div class="flex items-baseline justify-between">
+  <div class="flex flex-grow mt-4 space-x-6 overflow-auto">
+    <% [:application, :interview, :offer, :hired].each do |key| %>
+      <div class="flex flex-col flex-shrink-0 w-72">
+        <div class="flex items-center flex-shrink-0 h-10 px-2">
+          <span class="block text-lg font-semibold"><%= key.to_s.humanize %></span>
+        </div>
+        <div id="applicants-<%= key %>" class="h-full">
+          <% @applicants.where(stage: key).each do |applicant| %>
+            <%= render "card", applicant: applicant %>
+          <% end %>
+        </div>
+      </div>
+    <% end %>
+  </div>
+</div>
+```
+
+Here is the card partial:
+
+```erb
+<!-- app/views/applicants/_card.html.erb -->
+<div class="flex flex-col pb-2 overflow-auto">
+  <div class="relative flex flex-col items-start p-4 mt-3 bg-gray-100 rounded-lg cursor-move bg-opacity-90 group hover:bg-opacity-100">
+    <h4 class="text-gray-900"><%= link_to applicant.name, applicant, class: "cursor-pointer" %></h4>
+    <p class="text-sm text-gray-700"><%= applicant.job.title %> in <%= applicant.job.location %></p>
+    <div class="flex items-center w-full mt-3 text-xs font-medium text-gray-400">
+      <div class="flex items-center" title="Application Date">
+        <%= inline_svg_tag 'calendar.svg', class: 'h-4 w-4 inline-block' %>
+        <span class="ml-1 leading-none"><%= l(applicant.created_at.to_date, format: :short) %></span>
+      </div>
+    </div>
+  </div>
+</div>
+```
+
+**Notes**
+
+* Query by stage is happening in the view which isn't efficient, will fix later.
+* `applicants-#{key}` id will be used to dynamically insert new applicants into correct location on the board
+
+At this point can navigate to http://localhost:3000/applicants and see page like this:
+
+![applicants index](doc-images/applicants-index.png "applicants index")
+
+### Create applicants
+
+Update applicants controller to ensure only an authenticated user can perform actions, then modify `new` method to return CableReady JSON (similar to jobs controller). Then render the html content in the slideover drawer, just like we did earlier for jobs:
+
+```ruby
+# app/controllers/applicants_controller.rb
+before_action :authenticate_user!
+
+def new
+  html = render_to_string(partial: 'form', locals: { applicant: Applicant.new })
+  render operations: cable_car
+    .inner_html('#slideover-content', html: html)
+    .text_content('#slideover-header', text: 'Add an applicant')
+end
+```
+
+Update applicant form partial with styles and dropdown options using `options_for_select` helper method:
+
+```erb
+<%= form_with(model: applicant, id: 'applicant-form', html: { class: "space-y-6" }, data: { remote: true }) do |form| %>
+  <% if applicant.errors.any? %>
+    <div id="error_explanation">
+      <h2><%= pluralize(applicant.errors.count, "error") %> prohibited this applicant from being saved:</h2>
+
+      <ul>
+        <% applicant.errors.each do |error| %>
+          <li><%= error.full_message %></li>
+        <% end %>
+      </ul>
+    </div>
+  <% end %>
+
+  <div class="form-group">
+    <%= form.label :first_name %>
+    <%= form.text_field :first_name, class: "mt-1" %>
+  </div>
+
+  <div class="form-group">
+    <%= form.label :last_name %>
+    <%= form.text_field :last_name, class: "mt-1" %>
+  </div>
+
+  <div class="form-group">
+    <%= form.label :email %>
+    <%= form.text_field :email, class: "mt-1" %>
+  </div>
+
+  <div class="form-group">
+    <%= form.label :phone %>
+    <%= form.text_field :phone, class: "mt-1" %>
+  </div>
+
+  <div class="form-group">
+    <%= form.label :stage %>
+    <%= form.select :stage, options_for_select(Applicant.stages.map{ |key, _value| [key.humanize, key]}, applicant.stage), {}, { class: "mt-1" } %>
+  </div>
+
+  <div class="form-group">
+    <%= form.label :job_id %>
+    <%= form.select :job_id, options_for_select(Job.where(account_id: current_user.account_id).order(:title).pluck(:title, :id)), {}, { class: "mt-1" } %>
+  </div>
+
+  <%= form.submit 'Submit', class: 'btn-primary float-right' %>
+<% end %>
+```
+
+Update `create` method of applicants controller so that after applicant successfully created, it will close the slideover, and update it in the appropriate section of kanban board. Note the `prepend` operation specifies DOM id `"#applicants-#{@applicant.stage}"`:
+
+```ruby
+def create
+  @applicant = Applicant.new(applicant_params)
+  if @applicant.save
+    html = render_to_string(partial: 'card', locals: { applicant: @applicant })
+    render operations: cable_car
+      .prepend("#applicants-#{@applicant.stage}", html: html)
+      .dispatch_event(name: 'submit:success')
+  else
+    html = render_to_string(partial: 'form', locals: { applicant: @applicant })
+    render operations: cable_car
+      .inner_html('#applicant-form', html: html), status: :unprocessable_entity
+  end
+end
+```
+
+### ActiveStorage resumes
+
+When applicant is created, need to upload their resume. Will do so with [Active Storage](https://edgeguides.rubyonrails.org/active_storage_overview.html).
+
+Update applicant model to indicate it has a single attached resume: (if wanted to support multiple, could also use `has_many_attached`):
+
+```ruby
+# app/models/applicant.rb
+class Applicant < ApplicationRecord
+  belongs_to :job
+  has_one_attached :resume
+  # ...
+end
+```
+
+Update applicant form partial to add a file upload field for pdf:
+
+```erb
+<!-- app/views/applicants/_form.html.erb -->
+<div class="form-group">
+  <%= form.label :resume %>
+  <%= form.file_field :resume, accept: "application/pdf" %>
+</div>
+```
+
+Update `applicant_params` in applicants controller to allow new resume field.
+
+Try it out by uploading a pdf. Here's Rails server output from creating an applicant with an attached pdf resume. For local, it's using disk storage, saving at gitignored dir `storage/1b/i9/1bi9i62k6v4kiw1siwv8mlexidl6`
+
+```
+Started POST "/applicants" for ::1 at 2022-12-25 09:22:10 -0500
+Processing by ApplicantsController#create as CABLE_READY
+  Parameters: {"authenticity_token"=>"[FILTERED]", "applicant"=>{"first_name"=>"John", "last_name"=>"Doe", "email"=>"john.doe@example.com", "phone"=>"1234567", "stage"=>"application", "job_id"=>"1", "resume"=>#<ActionDispatch::Http::UploadedFile:0x0000000110393580 @tempfile=#<Tempfile:/var/folders/kj/49pyh5kd50g8cyxsby3yqhqc0000gn/T/RackMultipart20221225-9616-i1kx62.pdf>, @original_filename="temp-example-1.pdf", @content_type="application/pdf", @headers="Content-Disposition: form-data; name=\"applicant[resume]\"; filename=\"temp-example-1.pdf\"\r\nContent-Type: application/pdf\r\n">}, "commit"=>"Submit"}
+  User Load (0.3ms)  SELECT "users".* FROM "users" WHERE "users"."id" = ? ORDER BY "users"."id" ASC LIMIT ?  [["id", 1], ["LIMIT", 1]]
+  TRANSACTION (0.1ms)  begin transaction
+  ↳ app/controllers/applicants_controller.rb:33:in `create'
+  Job Load (0.1ms)  SELECT "jobs".* FROM "jobs" WHERE "jobs"."id" = ? LIMIT ?  [["id", 1], ["LIMIT", 1]]
+  ↳ app/controllers/applicants_controller.rb:33:in `create'
+  Applicant Create (1.7ms)  INSERT INTO "applicants" ("first_name", "last_name", "email", "phone", "stage", "status", "job_id", "created_at", "updated_at") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)  [["first_name", "John"], ["last_name", "Doe"], ["email", "john.doe@example.com"], ["phone", "1234567"], ["stage", "application"], ["status", nil], ["job_id", 1], ["created_at", "2022-12-25 14:22:10.719208"], ["updated_at", "2022-12-25 14:22:10.719208"]]
+  ↳ app/controllers/applicants_controller.rb:33:in `create'
+  ActiveStorage::Blob Load (0.4ms)  SELECT "active_storage_blobs".* FROM "active_storage_blobs" INNER JOIN "active_storage_attachments" ON "active_storage_blobs"."id" = "active_storage_attachments"."blob_id" WHERE "active_storage_attachments"."record_id" = ? AND "active_storage_attachments"."record_type" = ? AND "active_storage_attachments"."name" = ? LIMIT ?  [["record_id", 3], ["record_type", "Applicant"], ["name", "resume"], ["LIMIT", 1]]
+  ↳ app/controllers/applicants_controller.rb:33:in `create'
+  ActiveStorage::Attachment Load (1.9ms)  SELECT "active_storage_attachments".* FROM "active_storage_attachments" WHERE "active_storage_attachments"."record_id" = ? AND "active_storage_attachments"."record_type" = ? AND "active_storage_attachments"."name" = ? LIMIT ?  [["record_id", 3], ["record_type", "Applicant"], ["name", "resume"], ["LIMIT", 1]]
+  ↳ app/controllers/applicants_controller.rb:33:in `create'
+  ActiveStorage::Blob Create (0.7ms)  INSERT INTO "active_storage_blobs" ("key", "filename", "content_type", "metadata", "service_name", "byte_size", "checksum", "created_at") VALUES (?, ?, ?, ?, ?, ?, ?, ?)  [["key", "1bi9i62k6v4kiw1siwv8mlexidl6"], ["filename", "temp-example-1.pdf"], ["content_type", "application/pdf"], ["metadata", "{\"identified\":true}"], ["service_name", "local"], ["byte_size", 33220], ["checksum", "uNiNuYjyN+llmQt8+sA1ZQ=="], ["created_at", "2022-12-25 14:22:10.775949"]]
+  ↳ app/controllers/applicants_controller.rb:33:in `create'
+  ActiveStorage::Attachment Create (0.4ms)  INSERT INTO "active_storage_attachments" ("name", "record_type", "record_id", "blob_id", "created_at") VALUES (?, ?, ?, ?, ?)  [["name", "resume"], ["record_type", "Applicant"], ["record_id", 3], ["blob_id", 1], ["created_at", "2022-12-25 14:22:10.779310"]]
+  ↳ app/controllers/applicants_controller.rb:33:in `create'
+  Applicant Update (1.1ms)  UPDATE "applicants" SET "updated_at" = ? WHERE "applicants"."id" = ?  [["updated_at", "2022-12-25 14:22:10.781528"], ["id", 3]]
+  ↳ app/controllers/applicants_controller.rb:33:in `create'
+  TRANSACTION (2.5ms)  commit transaction
+  ↳ app/controllers/applicants_controller.rb:33:in `create'
+  Disk Storage (1.7ms) Uploaded file to key: 1bi9i62k6v4kiw1siwv8mlexidl6 (checksum: uNiNuYjyN+llmQt8+sA1ZQ==)
+  TRANSACTION (0.1ms)  begin transaction
+  ↳ app/controllers/applicants_controller.rb:33:in `create'
+  ActiveStorage::Blob Update (0.4ms)  UPDATE "active_storage_blobs" SET "metadata" = ? WHERE "active_storage_blobs"."id" = ?  [["metadata", "{\"identified\":true,\"analyzed\":true}"], ["id", 1]]
+  ↳ app/controllers/applicants_controller.rb:33:in `create'
+  TRANSACTION (1.7ms)  commit transaction
+  ↳ app/controllers/applicants_controller.rb:33:in `create'
+  Rendered applicants/_card.html.erb (Duration: 7.4ms | Allocations: 1007)
+Completed 200 OK in 148ms (Views: 0.4ms | ActiveRecord: 13.4ms | Allocations: 35119)
+```
+
+Then verify in Rails console:
+
+```ruby
+Applicant.last.resume.attached?
+#   Applicant Load (0.2ms)  SELECT "applicants".* FROM "applicants" ORDER BY "applicants"."id" DESC LIMIT ?  [["LIMIT", 1]]
+#   ActiveStorage::Attachment Load (0.3ms)  SELECT "active_storage_attachments".* FROM "active_storage_attachments" WHERE "active_storage_attachments"."record_id" = ? AND "active_storage_attachments"."record_type" = ? AND "active_storage_attachments"."name" = ? LIMIT ?  [["record_id", 3], ["record_type", "Applicant"], ["name", "resume"], ["LIMIT", 1]]
+# => true
+```
+
+#### Performance
+
+By default, ActiveStorage first uploads file to Rails server, then Rails server needs to transmit to 3rd party service (whatever you configured for prod such as AWS S3). That slows down Rails server handling file uploads. Better to use [direct upload](https://edgeguides.rubyonrails.org/active_storage_overview.html#direct-uploads) (although in dev, it still does the same thing since there is no cloud provider configured for dev).
+
+Direct upload makes it send file directly from browser to cloud storage provider, bypassing Rails server.
+
+Import and start ActiveStorage in application JavaScript:
+
+```javascript
+// app/javascript/application.js
+import * as ActiveStorage from "@rails/activestorage"
+
+ActiveStorage.start()
+```
+
+Add `direct_upload` option on file field in applicant form partial:
+
+```erb
+<!-- app/views/applicants/_form.html.erb -->
+<div class="form-group">
+  <%= form.label :resume %>
+  <%= form.file_field :resume, direct_upload: true, accept: "application/pdf" %>
+</div>
+```
+
+This renders markup as follows:
+
+```htm
+<input
+  accept="application/pdf"
+  data-direct-upload-url="http://localhost:3000/rails/active_storage/direct_uploads"
+  type="file"
+  name="applicant[resume]"
+  id="applicant_resume"
+>
+```
+
+### Drag applicants between stages
+
 ## My Questions and Comments
 
 1. Original `forms.css` from Chapter 1 has some syntax errors - space between hover and focus and `:` was causing Tailwind to not compile and breaking site styles. Solution is to remove extra spaces, so `hover:...` instead of `hover :...`
@@ -836,3 +1111,4 @@ Author says CableReady more flexible for complex situations.
    1. Maybe this is the answer from CableReady [usage](https://cableready.stimulusreflex.com/usage): "By default, the selector option provided to DOM-mutating operations expects a CSS selector that resolves to one single DOM element. If multiple elements are returned, only the first one is used."
    2. If it's not scoped to the partial, this could get tricky as the project grows, another developer working on a different feature may add a DOM element by chance that has the same name, and then the wrong element would get updated, breaking this feature.
 10. How to debug/step through js in Stimulus controller?
+11. Why is Redis needed? Would it also be used in the same way in prod?
