@@ -1,6 +1,11 @@
 class ApplicantsController < ApplicationController
   before_action :authenticate_user!
-  before_action :set_applicant, only: %i[ show edit update destroy ]
+  before_action :set_applicant, only: %i[ show edit update destroy change_stage ]
+
+  def change_stage
+    @applicant.update(applicant_params)
+    head :ok
+  end
 
   # GET /applicants or /applicants.json
   def index

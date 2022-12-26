@@ -26,6 +26,8 @@
     - [ActiveStorage resumes](#activestorage-resumes)
       - [Performance](#performance)
     - [Drag applicants between stages](#drag-applicants-between-stages)
+      - [Dragging applicants with Stimulus](#dragging-applicants-with-stimulus)
+      - [Sidebar: Drag-and-drop with StimulusReflex](#sidebar-drag-and-drop-with-stimulusreflex)
   - [My Questions and Comments](#my-questions-and-comments)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -54,10 +56,14 @@ bin/dev
   * [Turbo Frames](https://turbo.hotwired.dev/handbook/frames) for partial page updates. Any links and forms inside a frame are captured, and the frame contents automatically updated after receiving a response. Regardless of whether the server provides a full document, or just a fragment containing an updated version of the requested frame, only that particular frame will be extracted from the response to replace the existing content
   * [Turbo Streams](https://turbo.hotwired.dev/handbook/streams) for reactive page updates. Delivers page changes as fragments of HTML wrapped in self-executing `<turbo-stream>` elements. Each stream element specifies an action together with a target ID to declare what should happen to the HTML inside it. These elements are delivered by the server over a WebSocket, [SSE](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events) or other transport to bring the application alive with updates made by other users or processes.
   * [Stimulus](https://stimulus.hotwired.dev/handbook/introduction) for front end interactivity. Enhances static or server-rendered HTML—the “HTML you already have”—by connecting JavaScript objects to elements on the page using simple annotations.
+    * [Callbacks](https://stimulus.hotwired.dev/reference/lifecycle-callbacks)
+    * [Values](https://stimulus.hotwired.dev/reference/values)
 * [CableReady](https://cableready.stimulusreflex.com/) further server-powered frontend interactivity and reactive page updates. Triggers client-side DOM changes, events and notifications over ActionCable web sockets. These commands are called [operations](https://cableready.stimulusreflex.com/reference/operations). CableReady is the primary dependency powering StimulusReflex (see below). Establishes a standard for programmatically updating browser state with no need for custom JavaScript.
 * [StimulusReflex](https://docs.stimulusreflex.com/) works together with CableReady. Extends the capabilities of both Rails and Stimulus by intercepting user interactions and passing them to Rails over real-time websockets. These interactions are processed by Reflex actions that change application state. The current page is quickly re-rendered and the changes are sent to the client using CableReady. The page is then [morphed](https://github.com/patrick-steele-idem/morphdom) to reflect the new application state. This entire round-trip allows us to update the UI in 20-30ms without flicker or expensive page loads.
 * [mrujs](https://mrujs.com/) Sprinkle interactivity into your HTML elements using data attributes. A replacement for `@rails/ujs`, which used to ship by default with Rails 6 but has since been deprecated.
+  * [fetch](https://mrujs.com/references/fetch)
 * [CableCar](https://cableready.stimulusreflex.com/v/v5/cable-car) An Mrujs [plugin](https://mrujs.com/how-tos/integrate-cablecar) for use with CableReady's JSON serializer. CableReady was originally created to only work over ActionCable (aka websockets). With CableCar, operation queueing can also work over Ajax.
+* [SortableJS](https://sortablejs.github.io/Sortable/) JavaScript library for reorderable drag-and-drop lists.
 
 All form POST requests are automatically having header set `Accept: text/vnd.turbo-stream.html, text/html, application/xhtml+xml`, which makes Rails controller process request as turbo stream, eg: `Processing by JobsController#create as TURBO_STREAM`. Where is this configured to do so?
 
@@ -821,7 +827,7 @@ end
 
 ### Adding jobs with Turbo Streams
 
-So far, have used Stimulus/StimulusReflex, CableReady and Mrujs to open/close slideover, populate it with content and process form submissions.
+So far, have used Stimulus, CableReady and Mrujs to open/close slideover, populate it with content and process form submissions.
 
 Another way to achieve this is with Stimulus, Turbo Streams, and Turbo Frames. Do this in a separate branch...
 
@@ -1096,6 +1102,308 @@ This renders markup as follows:
 
 ### Drag applicants between stages
 
+Allow user to drag-and-drop applicants between hiring stages.
+
+Will use [SortableJS](https://sortablejs.github.io/Sortable/) for re-orderable drag and drop lists.
+
+First solution: Use Stimulus to send PATCH request to server toupdate applicant hiring stage after drag event.
+
+Second solution: Use StimulusReflex to perform update without manually constructing PATCH request.
+
+Add sortablejs:
+
+```
+yarn add sortablejs
+```
+
+#### Dragging applicants with Stimulus
+
+Common use case for Stimulus controllers is to integrate thrid party JS libs.
+
+Generate a new stimulus controller:
+
+```
+rails g stimulus drag
+```
+
+```javascript
+import { Controller } from 'stimulus'
+import Sortable from 'sortablejs'
+
+export default class extends Controller {
+  static targets = [ 'list' ]
+
+  listTargetConnected() {
+    this.listTargets.forEach(this.initializeSortable.bind(this))
+  }
+
+  initializeSortable(target) {
+    new Sortable(target, {
+      group: 'hiring-stage',
+      animation: 100,
+      sort: false
+    })
+  }
+}
+```
+
+**Notes**
+
+* Using a single target `list`.
+* `[name]TargetConnected` is a Stimulus [callback](https://stimulus.hotwired.dev/reference/targets#connected-and-disconnected-callbacks) that runs each time the target element is added to the DOM. This is the perfect place to integrate third party JS libraries.
+* In the `listTargetConnected` callback, loop through each list target and call `initializeSortable`, which invokes `new Sortable(...)` from the `sortablejs` library.
+* Using the [group option](https://github.com/SortableJS/Sortable#group-option) from SortableJS library: "To drag elements from one list into another, both lists must have the same group value."
+* Even though there's a single target `list` declared, it can refer to multiple DOM elements (i.e. the markup may have multiple DOM elements with the `data-target="list"` attribute). We can reference all of them in the Stimulus controller with `this.listTargets`.
+
+Stimulus uses mutation observers so we can attach behavior when element enters/exits DOM. Therefore no need to listen to page-level events on document/window.
+
+Adding behaviour on `connect` or `initialize` [callbacks](https://stimulus.hotwired.dev/reference/lifecycle-callbacks) is a common pattern.
+
+Connect controller to DOM in applicants list view:
+
+```erb
+<!-- app/views/applicants/index.html.erb -->
+<div class="flex items-baseline justify-between mb-6">
+  <h2 class="mt-6 text-3xl font-extrabold text-gray-700">
+    Applicants
+  </h2>
+  <%= link_to "Add a new applicant", new_applicant_path, class: "btn-primary-outline", data: { action: "mouseup->slideover#open", remote: true } %>
+</div>
+<div class="flex items-baseline justify-between">
+  <div class="flex flex-grow mt-4 space-x-6 overflow-auto" data-controller="drag">
+    <% [:application, :interview, :offer, :hired].each do |key| %>
+      <div class="flex flex-col flex-shrink-0 w-72">
+        <div class="flex items-center flex-shrink-0 h-10 px-2">
+          <span class="block text-lg font-semibold"><%= key.to_s.humanize %></span>
+        </div>
+        <div id="applicants-<%= key %>" class="h-full" data-drag-target="list">
+          <% @applicants.where(stage: key).each do |applicant| %>
+            <%= render "card", applicant: applicant %>
+          <% end %>
+        </div>
+      </div>
+    <% end %>
+  </div>
+</div>
+```
+
+* Added `data-controller="drag"` to `div` that wraps all applicant stage columns.
+* Added `data-drag-target="list"` to each column (application, interview, offer, hired).
+* Whenever an element with `data-drag-target="list"` enters the DOM, Stimulus will fire the `listTargetConnected` callback in the associated controller.
+* Each list has same `group` attribute, that's how applicants can be dragged from one list to another.
+* `sort: false` prevents dragging applicants to new position within the same list, can only drag applicants to a new list.
+
+At this point, dragging works in UI, but reloading page puts them back to where they started. Need to hook this up to server side code to persist change.
+
+Update drag controller to send PATCH request when user finishes dragging an applicant. To do this, need to use Sortable's [onEnd](https://github.com/SortableJS/Sortable#options) option:
+
+```javascript
+// app/javascript/controllers/drag_controller.js
+import { Controller } from "@hotwired/stimulus"
+import Sortable from 'sortablejs'
+
+export default class extends Controller {
+  static targets = [ 'list' ]
+  static values = {
+    url: String,
+    attribute: String
+  }
+
+  listTargetConnected() {
+    this.listTargets.forEach(this.initializeSortable.bind(this))
+  }
+
+  initializeSortable(target) {
+    new Sortable(target, {
+      group: 'hiring-stage',
+      animation: 100,
+      sort: false,
+      onEnd: this.end.bind(this)
+    })
+  }
+
+  end(event) {
+    // event.item is the dragged HTMLElement from SortableJS
+    // event.item.dataset.id is data-id` from _card partial (this is the dragged item)
+    const id = event.item.dataset.id
+
+    // this.urlValue is the value of `data-drag-url-value` from DOM element in controller scope
+    // replace function used to replace the string ":id" with actual applicant id retrieved in previous line
+    const url = this.urlValue.replace(":id", id)
+
+    // https://developer.mozilla.org/en-US/docs/Web/API/FormData
+    const formData = new FormData()
+
+    // this.attributeValue is `data-drag-attribute-value` from DOM element in controller scope
+    // event.to is target list from SortableJS (i.e. list user is dragging TO)
+    // event.to.dataset.newValue is `data-new-value` on the target list DOM element
+    formData.append(this.attributeValue, event.to.dataset.newValue)
+
+    // temp debug, for example, dragging applicant to Interview column:
+    // applicant[stage]: interview
+    formData.forEach((value, key) => console.log(key + ': ' + value));
+
+    // https://mrujs.com/references/fetch
+    // NOTE: We are not specifying `headers` in the options object
+    // but either mrujs or fetch is automatically adding the Content-Type header, for example:
+    // 'Content-Type: multipart/form-data; boundary=----WebKitFormBoundaryZ9m8Jwdw5IrMXYrG'
+    window.mrujs.fetch(url, {
+      method: 'PATCH',
+      body: formData
+    }).then(() => {}).catch((error) => console.error(error))
+  }
+}
+```
+
+**Notes:**
+
+* Added [values](https://stimulus.hotwired.dev/reference/values) to specify `url` and `attribute` rather than hard-coding these in controller. This allows controller to be re-used in multiple places.
+* Added `end` function called when Sortable's `onEnd` event is fired.
+* `end` function gets id of applicant that just got moved, and combines with `url` and `attribute` values to construct PATCH request to server.
+
+Update view to define `url` and `attribute` controller values:
+
+```erb
+<!-- app/views/applicants/index.html.erb -->
+<div class="flex items-baseline justify-between mb-6">
+  <h2 class="mt-6 text-3xl font-extrabold text-gray-700">
+    Applicants
+  </h2>
+  <%= link_to "Add a new applicant", new_applicant_path, class: "btn-primary-outline", data: { action: "mouseup->slideover#open", remote: true } %>
+</div>
+<div class="flex items-baseline justify-between">
+  <div
+    data-controller="drag"
+    data-drag-url-value="/applicants/:id/change_stage"
+    data-drag-attribute-value="applicant[stage]"
+    class="flex flex-grow mt-4 space-x-6 overflow-auto"
+  >
+    <% [:application, :interview, :offer, :hired].each do |key| %>
+      <div class="flex flex-col flex-shrink-0 w-72">
+        <div class="flex items-center flex-shrink-0 h-10 px-2">
+          <span class="block text-lg font-semibold"><%= key.to_s.humanize %></span>
+        </div>
+        <div
+          id="applicants-<%= key %>"
+          data-drag-target="list"
+          data-new-value="<%= key.to_s %>"
+          class="h-full"
+        >
+          <% @applicants.where(stage: key).each do |applicant| %>
+            <%= render "card", applicant: applicant %>
+          <% end %>
+        </div>
+      </div>
+    <% end %>
+  </div>
+</div>
+```
+
+Update card partial so that each applicant has it's `data-id` attribut epopulated. That's what's being referenced in Stimulus controller code `const id = event.item.dataset.id`:
+
+```erb
+<!-- app/views/applicants/_card.html.erb -->
+<div class="flex flex-col pb-2 overflow-auto" data-id="<%= applicant.id %>">
+  <!-- Snip -->
+</div>
+```
+
+We're sending a PATCH request to (non RESTful) endpoint `/applicants/:id/change_stage`. To make it truly RESTful, would define `Applicants::StageChangesController` with an `update` action but that's overkill for learning app.
+
+Instead, define non RESTful action in Rails router by adding defining a patch `change_stage` as part of `applicants` resource:
+
+```ruby
+# config/routes.rb
+resources :applicants do
+  patch :change_stage, on: :member
+end
+```
+
+An explanation of the above from ChatGPT:
+
+> In Rails, the resources method is used to define a set of routes for a RESTful resource in the application's routing configuration. It creates a set of default routes for the resource, which handle common HTTP verbs such as GET, POST, PUT, and DELETE.
+
+> The `patch :change_stage, on: :member` line is defining a custom route for the Applicant resource. The patch method is used to specify that this route should handle HTTP PATCH requests, and the `:change_stage` symbol is the name of the route. The `on: :member option` specifies that this route should be a member route, which means it requires an :id parameter to identify a specific resource.
+
+> So, this code defines a custom route for the Applicant resource that can be used to update a specific applicant's stage with an HTTP PATCH request. The route will be accessible at the /applicants/:id/change_stage URL, where :id is the ID of the applicant to be updated.
+
+
+
+This exposes applicant routes as follows:
+
+```
+Prefix Verb   URI Pattern                                                                                       Controller#Action
+change_stage_applicant PATCH  /applicants/:id/change_stage(.:format)                                                            applicants#change_stage
+            applicants GET    /applicants(.:format)                                                                             applicants#index
+                       POST   /applicants(.:format)                                                                             applicants#create
+         new_applicant GET    /applicants/new(.:format)                                                                         applicants#new
+        edit_applicant GET    /applicants/:id/edit(.:format)                                                                    applicants#edit
+             applicant GET    /applicants/:id(.:format)                                                                         applicants#show
+                       PATCH  /applicants/:id(.:format)                                                                         applicants#update
+                       PUT    /applicants/:id(.:format)                                                                         applicants#update
+                       DELETE /applicants/:id(.:format)                                                                         applicants#destroy
+```
+
+Define `change_state` method in applicants controller:
+
+```ruby
+# app/controllers/applicants_controller.rb
+before_action :set_applicant, only: %i[ show edit update destroy change_stage ]
+
+def change_stage
+  @applicant.update(applicant_params)
+  head :ok
+end
+```
+
+At this point, should be able to drag and drop applicants between hiring stages, and have change persisted in database.
+
+For example, drag applicant from Application column to Interview column. Browser submits PATCH like this:
+
+```
+curl 'http://localhost:3000/applicants/1/change_stage' \
+-X 'PATCH' \
+-H 'Accept-Language: en-US,en;q=0.9' \
+-H 'Connection: keep-alive' \
+-H 'Content-Type: multipart/form-data; boundary=----WebKitFormBoundaryZ9m8Jwdw5IrMXYrG' \
+-H 'Cookie: ...' \
+-H 'Origin: http://localhost:3000' \
+-H 'Referer: http://localhost:3000/applicants' \
+-H 'X-CSRF-TOKEN: EtGq...' \
+-H 'accept: */*' \
+-H 'x-requested-with: XmlHttpRequest' \
+--data-raw $'------WebKitFormBoundaryZ9m8Jwdw5IrMXYrG\r\nContent-Disposition: form-data; name="applicant[stage]"\r\n\r\ninterview\r\n------WebKitFormBoundaryZ9m8Jwdw5IrMXYrG--\r\n' \
+--compressed
+```
+
+Rails server output looks like this (happened to be applicant id of `1`):
+
+```
+Started PATCH "/applicants/1/change_stage" for ::1 at 2022-12-26 10:07:45 -0500
+Processing by ApplicantsController#change_stage as */*
+Parameters: {"applicant"=>{"stage"=>"interview"}, "id"=>"1"}
+User Load (0.1ms)  SELECT "users".* FROM "users" WHERE "users"."id" = ? ORDER BY "users"."id" ASC LIMIT ?  [["id", 1], ["LIMIT", 1]]
+Applicant Load (0.2ms)  SELECT "applicants".* FROM "applicants" WHERE "applicants"."id" = ? LIMIT ?  [["id", 1], ["LIMIT", 1]]
+↳ app/controllers/applicants_controller.rb:76:in `set_applicant'
+TRANSACTION (0.1ms)  begin transaction
+↳ app/controllers/applicants_controller.rb:6:in `change_stage'
+Job Load (0.1ms)  SELECT "jobs".* FROM "jobs" WHERE "jobs"."id" = ? LIMIT ?  [["id", 1], ["LIMIT", 1]]
+↳ app/controllers/applicants_controller.rb:6:in `change_stage'
+Applicant Update (4.9ms)  UPDATE "applicants" SET "stage" = ?, "updated_at" = ? WHERE "applicants"."id" = ?  [["stage", "interview"], ["updated_at", "2022-12-26 15:07:45.921162"], ["id", 1]]
+↳ app/controllers/applicants_controller.rb:6:in `change_stage'
+TRANSACTION (2.5ms)  commit transaction
+↳ app/controllers/applicants_controller.rb:6:in `change_stage'
+Completed 200 OK in 75ms (ActiveRecord: 8.0ms | Allocations: 6846)
+```
+
+#### Sidebar: Drag-and-drop with StimulusReflex
+
+This is an alternative way to do drag and drop using StimulusReflex instead of Stimulus.
+
+StimulusReflex-enabled Stimulus controllers are very similar to regular Stimulus controllers, with the added bonus of being able to [trigger server-side Ruby code](https://docs.stimulusreflex.com/rtfm/reflexes#calling-a-reflex-in-a-stimulus-controller).
+
+Do this on a branch.
+
 ## My Questions and Comments
 
 1. Original `forms.css` from Chapter 1 has some syntax errors - space between hover and focus and `:` was causing Tailwind to not compile and breaking site styles. Solution is to remove extra spaces, so `hover:...` instead of `hover :...`
@@ -1110,5 +1418,5 @@ This renders markup as follows:
 9. When rendering a CableCar JSON response from a Rails controller such as `.inner_html('#slideover-content', html: html)`, what's the scope of the DOM that will be searched for finding the given selector? i.e. will it match the first `#slideover-content` found *anywhere* in the DOM? Or only the element that is located within the partial `app/views/shared/_slideover.html.erb`? The CableReady doc for [inner_html](https://cableready.stimulusreflex.com/reference/operations/dom-mutations#inner_html) doesn't explain or even have a DOM selector.
    1. Maybe this is the answer from CableReady [usage](https://cableready.stimulusreflex.com/usage): "By default, the selector option provided to DOM-mutating operations expects a CSS selector that resolves to one single DOM element. If multiple elements are returned, only the first one is used."
    2. If it's not scoped to the partial, this could get tricky as the project grows, another developer working on a different feature may add a DOM element by chance that has the same name, and then the wrong element would get updated, breaking this feature.
-10. How to debug/step through js in Stimulus controller?
 11. Why is Redis needed? Would it also be used in the same way in prod?
+12. In Chapter 4 first solution using Stimulus controller, initializeSortable gets called 16 times in total, 4 times for each column.
