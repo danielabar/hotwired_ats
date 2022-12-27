@@ -29,6 +29,8 @@
       - [Dragging applicants with Stimulus](#dragging-applicants-with-stimulus)
       - [Sidebar: Drag-and-drop with StimulusReflex](#sidebar-drag-and-drop-with-stimulusreflex)
   - [Chapter 5 Filtering and sorting with Turbo Frames](#chapter-5-filtering-and-sorting-with-turbo-frames)
+    - [Add filtering and sorting UI](#add-filtering-and-sorting-ui)
+    - [Add text search with PgSearch](#add-text-search-with-pgsearch)
   - [My Questions and Comments](#my-questions-and-comments)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -1411,7 +1413,66 @@ Will add feature to search for applicants by name, filter by job they applied to
 
 Will be using Turbo Frames to display filtered results.
 
-Backend will use [pg_search](https://github.com/Casecommons/pg_search)
+Backend will use [pg_search](https://github.com/Casecommons/pg_search).
+
+### Add filtering and sorting UI
+
+Start with adding vanilla Rails search form on applicants index page, which will make a GET request to `/applicants` when submitted, with parameters `:query`, `:job`, and `:sort`:
+
+```erb
+<!-- app/views/applicants/index.html.erb -->
+<div class="flex mb-6 justify-end">
+  <%= form_with url: applicants_path, method: :get, class: "flex items-baseline" do |form| %>
+    <div class="form-group mr-2">
+      <%= form.label :sort, class: "sr-only" %>
+      <%= form.select :sort, options_for_select([['Application Date Ascending', 'created_at-asc'], ['Application Date Descending', 'created_at-desc']], params[:sort]) %>
+    </div>
+    <div class="form-group mr-2">
+      <%= form.label :job, class: "sr-only" %>
+      <%= form.select :job, options_for_select(Job.where(account_id: current_user.account_id).order(:title).pluck(:title, :id), params[:job]), { include_blank: 'All Jobs' } %>
+    </div>
+    <div class="form-group mr-2">
+      <%= form.label :query, class: "sr-only" %>
+      <%= form.text_field :query, placeholder: "Search applicants", value: params[:query] %>
+    </div>
+    <%= form.button "Filter", class: "btn-primary" %>
+  <% end %>
+</div>
+```
+
+Update applicants controller `index` method to check for presence of the search params, and invoke ActiveRecord `where` and `order` methods to apply the search params (ugly but functional):
+
+```ruby
+# app/controllers/applicants_controller.rb
+def index
+  if search_params.present?
+    @applicants = Applicant.includes(:job)
+    @applicants = @applicants.where(job_id: search_params[:job]) if search_params[:job].present?
+    @applicants = @applicants.where('first_name ILIKE ? OR last_name ILIKE ?', "%#{search_params[:query]}%", "%#{search_params[:query]}%") if search_params[:query].present?
+    if search_params[:sort].present?
+      sort = search_params[:sort].split('-')
+      @applicants = @applicants.order("#{sort[0]} #{sort[1]}")
+    end
+  else
+    @applicants = Applicant.includes(:job).all
+  end
+end
+
+private
+
+# Be sure to place this at the bottom of the controller, with the other private methods
+def search_params
+  params.permit(:query, :job, :sort)
+end
+```
+
+Code above works but difficult to read and maintain. Also each request has to refresh entire page. Instead we want to only update list of applicants.
+
+### Add text search with PgSearch
+
+First improvement will be to clean up search logic by using the pg_search gem and Postgres full text search.
+
+Left att Add text search with PgSearch
 
 ## My Questions and Comments
 
