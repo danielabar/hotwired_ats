@@ -1379,21 +1379,20 @@ curl 'http://localhost:3000/applicants/1/change_stage' \
 Rails server output looks like this (happened to be applicant id of `1`):
 
 ```
-Started PATCH "/applicants/1/change_stage" for ::1 at 2022-12-26 10:07:45 -0500
-Processing by ApplicantsController#change_stage as */*
-Parameters: {"applicant"=>{"stage"=>"interview"}, "id"=>"1"}
-User Load (0.1ms)  SELECT "users".* FROM "users" WHERE "users"."id" = ? ORDER BY "users"."id" ASC LIMIT ?  [["id", 1], ["LIMIT", 1]]
-Applicant Load (0.2ms)  SELECT "applicants".* FROM "applicants" WHERE "applicants"."id" = ? LIMIT ?  [["id", 1], ["LIMIT", 1]]
-↳ app/controllers/applicants_controller.rb:76:in `set_applicant'
-TRANSACTION (0.1ms)  begin transaction
-↳ app/controllers/applicants_controller.rb:6:in `change_stage'
-Job Load (0.1ms)  SELECT "jobs".* FROM "jobs" WHERE "jobs"."id" = ? LIMIT ?  [["id", 1], ["LIMIT", 1]]
-↳ app/controllers/applicants_controller.rb:6:in `change_stage'
-Applicant Update (4.9ms)  UPDATE "applicants" SET "stage" = ?, "updated_at" = ? WHERE "applicants"."id" = ?  [["stage", "interview"], ["updated_at", "2022-12-26 15:07:45.921162"], ["id", 1]]
-↳ app/controllers/applicants_controller.rb:6:in `change_stage'
-TRANSACTION (2.5ms)  commit transaction
-↳ app/controllers/applicants_controller.rb:6:in `change_stage'
-Completed 200 OK in 75ms (ActiveRecord: 8.0ms | Allocations: 6846)
+StimulusReflex::Channel#receive({"attrs"=>{"data-id"=>"1", "class"=>"flex flex-col pb-2 overflow-auto", "draggable"=>"false", "style"=>"", "checked"=>false, "selected"=>false, "tag_name"=>"DIV"}, "dataset"=>{"dataset"=>{"data-id"=>"1"}, "datasetAll"=>{}}, "selectors"=>[], "reflexId"=>"3832a1dc-cf72-423e-acee-013a870a1088", "resolveLate"=>false, "suppressLogging"=>false, "xpathController"=>"/html/body/div[1]/main[1]/div[1]/div[2]/div[1]", "xpathElement"=>"//*[@id='applicants-interview']/div[2]", "inner_html"=>"", "text_content"=>"", "reflexController"=>"draggable", "permanentAttributeName"=>"data-reflex-permanent", "target"=>"Draggable#update_record", "args"=>["Applicant", "stage", "interview"], "url"=>"http://localhost:3000/applicants", "tabId"=>"bc18b325-770b-4171-81b0-44bab965ca1f", "formData"=>""})
+Applicant Load (1.5ms)  SELECT "applicants".* FROM "applicants" WHERE "applicants"."id" = ? LIMIT ?  [["id", 1], ["LIMIT", 1]]
+↳ app/reflexes/draggable_reflex.rb:6:in `update_record'
+TRANSACTION (0.3ms)  begin transaction
+↳ app/reflexes/draggable_reflex.rb:7:in `update_record'
+Job Load (0.4ms)  SELECT "jobs".* FROM "jobs" WHERE "jobs"."id" = ? LIMIT ?  [["id", 1], ["LIMIT", 1]]
+↳ app/reflexes/draggable_reflex.rb:7:in `update_record'
+Applicant Update (0.6ms)  UPDATE "applicants" SET "stage" = ?, "updated_at" = ? WHERE "applicants"."id" = ?  [["stage", "interview"], ["updated_at", "2022-12-27 12:46:49.536507"], ["id", 1]]
+↳ app/reflexes/draggable_reflex.rb:7:in `update_record'
+TRANSACTION (1.4ms)  commit transaction
+↳ app/reflexes/draggable_reflex.rb:7:in `update_record'
+ActionCable] Broadcasting to StimulusReflex::Channel:: {"cableReady"=>true, "operations"=>[{"name"=>"stimulus-reflex:morph-nothing", "selector"=>nil, "payload"=>{}, "stimulusReflex"=>{"attrs"=>{"data-id"=>"1", "class"=>"flex flex-col pb-2 overflow-auto", "draggable"=>"false", "style"=>"", "checked"=>false, "selected"=>false, "tagName"=>"DIV"}, "datas...
+e7786a4f] 1/1 DraggableReflex#update_record -> document via Nothing Morph (dispatch_event)
+StimulusReflex::Channel transmitting {"cableReady"=>true, "operations"=>[{"name"=>"stimulus-reflex:morph-nothing", "selector"=>nil, "payload"=>{}, "stimulusReflex"=>{"attrs"=>{"data-id"=>"1", "class"=>"flex flex-col pb-2 overflow-auto", "draggable"=>"false", "style"=>"", "checked"=>false, "selected"=>false, "tagName"=>"DIV"}, "datas... (via streamed from StimulusReflex::Channel:)
 ```
 
 #### Sidebar: Drag-and-drop with StimulusReflex
