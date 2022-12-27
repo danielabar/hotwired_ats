@@ -6,9 +6,9 @@
 </div>
 <div class="flex items-baseline justify-between">
   <div
-    data-controller="drag"
-    data-drag-url-value="/applicants/:id/change_stage"
-    data-drag-attribute-value="applicant[stage]"
+    data-controller="draggable"
+    data-draggable-resource-value="Applicant"
+    data-draggable-attribute-value="stage"
     class="flex flex-grow mt-4 space-x-6 overflow-auto"
   >
     <% [:application, :interview, :offer, :hired].each do |key| %>
@@ -18,7 +18,7 @@
         </div>
         <div
           id="applicants-<%= key %>"
-          data-drag-target="list"
+          data-draggable-target="list"
           data-new-value="<%= key.to_s %>"
           class="h-full"
         >

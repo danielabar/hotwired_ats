@@ -1400,9 +1400,274 @@ Completed 200 OK in 75ms (ActiveRecord: 8.0ms | Allocations: 6846)
 
 This is an alternative way to do drag and drop using StimulusReflex instead of Stimulus.
 
-StimulusReflex-enabled Stimulus controllers are very similar to regular Stimulus controllers, with the added bonus of being able to [trigger server-side Ruby code](https://docs.stimulusreflex.com/rtfm/reflexes#calling-a-reflex-in-a-stimulus-controller).
+StimulusReflex-enabled Stimulus controllers are very similar to regular Stimulus controllers, with the added bonus of being able to [trigger server-side Ruby code](https://docs.stimulusreflex.com/rtfm/reflexes#calling-a-reflex-in-a-stimulus-controller). Websockets are used.
 
 Do this on a branch.
+
+Will have a Stimulus controller handle initializing Sortable on draggable elements.
+
+Stimulus controller will pass control to backend when Sortable `end` event is triggered.
+
+Backend will silently save applicant's new stage in db.
+
+Generate a new [reflex](https://docs.stimulusreflex.com/rtfm/reflex-classes):
+
+```
+bin/rails g stimulus_reflex draggable
+bin/rails stimulus:manifest:update
+```
+
+Implement draggable controller:
+
+```javascript
+// app/javascript/controllers/draggable_controller.js
+import ApplicationController from './application_controller'
+import Sortable from 'sortablejs'
+
+export default class extends ApplicationController {
+  static targets = [ 'list' ]
+  static values = {
+    attribute: String,
+    resource: String
+  }
+
+  connect () {
+    super.connect()
+    this.listTargets.forEach(this.initializeSortable.bind(this))
+  }
+
+  initializeSortable(target) {
+    new Sortable(target, {
+      group: 'shared',
+      animation: 100,
+      sort: false,
+      onEnd: this.end.bind(this)
+    })
+  }
+
+  end(event) {
+    const value = event.to.dataset.newValue
+
+    // https://docs.stimulusreflex.com/rtfm/reflexes#calling-a-reflex-in-a-stimulus-controller
+    // ApplicationController imports the StimulusReflex Controller and calls StimulusReflex.register(this).
+    // As a result, ApplicationController and all Stimulus Controllers that extend it gain a method called `stimulate`.
+    this.stimulate(
+      "Draggable#update_record",
+      event.item,
+      this.resourceValue,
+      this.attributeValue,
+      value
+    )
+  }
+}
+```
+
+**Notes**
+
+* In Stimulus only solution, we imported `stimulus`. With StimulusReflex, we import `application_controller` and extend it to enable StimulusReflex functionality in our controller.
+* `super.connect()` in the `connect` lifecycle method is part of creation of a StimulusReflex controller.
+* `end` function is very different from Stimulus only solution (recall we had to construct a PATCH request). This time, with StimulusReflex, call `this.stimulate` to [trigger a reflex action on the server](https://docs.stimulusreflex.com/rtfm/reflexes#calling-a-reflex-in-a-stimulus-controller).
+* `stimulate` function receives data from DOM event and values from Stimulus controller - these are used by server-side reflex action to find and update applicant in the database.
+
+Define `update_record` action in corresponding reflex class - this is a Ruby file:
+
+```ruby
+# app/reflexes/draggable_reflex.rb
+class DraggableReflex < ApplicationReflex
+
+  # resource: Name of model class as a string
+  # field: Name of a field in the model as a string
+  # value: The new value for the field
+  def update_record(resource, field, value)
+
+    # `element` is a special variable provided by StimulusReflex that refers to the DOM element that triggered the reflex.
+    # OR does it default to the DOM element of the controller in scope?
+    # It is not defined within the DraggableReflex class itself, but rather it is made available to the reflex by StimulusReflex.
+    # `element.dataset` refers to collection of `data-*` attributes on the DOM element.
+    id = element.dataset.id
+
+    # Invoke ActiveRecord `find` method to find resource by ID
+    resource = resource.constantize.find(id)
+
+    # Invoke ActiveRecord `update` method to update the `field` field on this instance to the new `value`
+    resource.update("#{field}": value)
+
+    # Update DOM with new value.
+    # `:nothing` indicates that no specific DOM element should be updated,
+    # rather, the entire page will be re-rendered with the updated data.
+    morph :nothing
+  end
+end
+```
+
+**Notes**
+
+* In JavaScript controller, `this.stimulate` passes in 5 arguments to the reflex. First is reflex name and method (eg: `Draggable#update_record`), then 4 more args. But the `update_record` method in the draggable reflex only accepts 3 args.
+* `event.item` passed from JS controller to reflex is used to override StimulusReflex default `element` which would otherwise be the DOM element the controller is attached to via `data-controller` attribute in markup. Instead we make the dragged item the `element` on which StimulusReflex will operate.
+* [Morphs](https://docs.stimulusreflex.com/rtfm/morph-modes) are used to update DOM.
+* Default is after a reflex action completes (eg: `update_record` defined above), StimulsReflex updates entire body of page by re-processing current controller action (Rails server controller?), sending new HTML body to front end, and makes updates with [morphdom](https://github.com/patrick-steele-idem/morphdom).
+* Above default is usually exactly what you want, no need to manage client-side state, let StimulusReflex update page as efficiently as possible after state has changed on server as result of reflex action.
+* But in this particular case, no need for page update because DOM is already up-to-date due to user dragging applicant to the column where it should be. In this case, we only need the reflex action to update the database. That's why we're using a [Nothing Morph](https://docs.stimulusreflex.com/rtfm/morph-modes#nothing-morphs).
+
+Update DOM to connect `draggable` controller so that user dragging and dropping will use our new StimulusReflex. Need to update applicants index page, which is currently connected to our previous Stimulus only controller:
+
+```erb
+<!-- app/views/applicants/index.html.erb -->
+<div class="flex items-baseline justify-between mb-6">
+  <h2 class="mt-6 text-3xl font-extrabold text-gray-700">
+    Applicants
+  </h2>
+  <%= link_to "Add a new applicant", new_applicant_path, class: "btn-primary-outline", data: { action: "mouseup->slideover#open", remote: true } %>
+</div>
+<div class="flex items-baseline justify-between">
+  <div
+    data-controller="draggable"
+    data-draggable-resource-value="Applicant"
+    data-draggable-attribute-value="stage"
+    class="flex flex-grow mt-4 space-x-6 overflow-auto"
+  >
+    <% [:application, :interview, :offer, :hired].each do |key| %>
+      <div class="flex flex-col flex-shrink-0 w-72">
+        <div class="flex items-center flex-shrink-0 h-10 px-2">
+          <span class="block text-lg font-semibold"><%= key.to_s.humanize %></span>
+        </div>
+        <div
+          id="applicants-<%= key %>"
+          data-draggable-target="list"
+          data-new-value="<%= key.to_s %>"
+          class="h-full"
+        >
+          <% @applicants.where(stage: key).each do |applicant| %>
+            <%= render "card", applicant: applicant %>
+          <% end %>
+        </div>
+      </div>
+    <% end %>
+  </div>
+</div>
+```
+
+Card partial remains the same as before.
+
+Restart server and try drag and drop.
+
+Firstly, just navigating to the applicants index page http://localhost:3000/applicants starts websockets. Browser request is:
+
+```
+curl 'ws://localhost:3000/cable' \
+-H 'Pragma: no-cache' \
+-H 'Origin: http://localhost:3000' \
+-H 'Accept-Language: en-US,en;q=0.9' \
+-H 'Sec-WebSocket-Key: KvcAioc+v497XRqKGPS8YQ==' \
+-H 'User-Agent: Mozilla...' \
+-H 'Upgrade: websocket' \
+-H 'Cache-Control: no-cache' \
+-H 'Cookie:...' \
+-H 'Sec-WebSocket-Protocol: actioncable-v1-json, actioncable-unsupported' \
+-H 'Connection: Upgrade' \
+-H 'Sec-WebSocket-Version: 13' \
+-H 'Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits' \
+--compressed
+```
+
+Rails server output shows:
+
+```
+Started GET "/cable" for ::1 at 2022-12-27 07:32:35 -0500
+Started GET "/cable" [WebSocket] for ::1 at 2022-12-27 07:32:35 -0500
+Successfully upgraded to WebSocket (REQUEST_METHOD: GET, HTTP_CONNECTION: Upgrade, HTTP_UPGRADE: websocket)
+StimulusReflex::Channel is transmitting the subscription confirmation
+StimulusReflex::Channel is streaming from StimulusReflex::Channel:
+```
+
+Move an applicant from Interview to Offer stage. Websocket on browser shows Command sent:
+
+```json
+{
+    "command": "message",
+    "identifier": "{\"channel\":\"StimulusReflex::Channel\"}",
+    "data": "{\"attrs\":{\"data-id\":\"1\",\"class\":\"flex flex-col pb-2 overflow-auto\",\"draggable\":\"false\",\"style\":\"\",\"checked\":false,\"selected\":false,\"tag_name\":\"DIV\"},\"dataset\":{\"dataset\":{\"data-id\":\"1\"},\"datasetAll\":{}},\"selectors\":[],\"reflexId\":\"c14ad90c-5175-4eb7-9803-61a5d18fa860\",\"resolveLate\":false,\"suppressLogging\":false,\"xpathController\":\"/html/body/div[1]/main[1]/div[1]/div[2]/div[1]\",\"xpathElement\":\"//*[@id='applicants-offer']/div[1]\",\"inner_html\":\"\",\"text_content\":\"\",\"reflexController\":\"draggable\",\"permanentAttributeName\":\"data-reflex-permanent\",\"target\":\"Draggable#update_record\",\"args\":[\"Applicant\",\"stage\",\"offer\"],\"url\":\"http://localhost:3000/applicants\",\"tabId\":\"b706f64e-114b-4445-9fda-6835f2fede35\",\"formData\":\"\"}"
+}
+```
+
+Processed by Rails server:
+
+```
+StimulusReflex::Channel#receive({"attrs"=>{"data-id"=>"1", "class"=>"flex flex-col pb-2 overflow-auto", "draggable"=>"false", "style"=>"", "checked"=>false, "selected"=>false, "tag_name"=>"DIV"}, "dataset"=>{"dataset"=>{"data-id"=>"1"}, "datasetAll"=>{}}, "selectors"=>[], "reflexId"=>"c14ad90c-5175-4eb7-9803-61a5d18fa860", "resolveLate"=>false, "suppressLogging"=>false, "xpathController"=>"/html/body/div[1]/main[1]/div[1]/div[2]/div[1]", "xpathElement"=>"//*[@id='applicants-offer']/div[1]", "inner_html"=>"", "text_content"=>"", "reflexController"=>"draggable", "permanentAttributeName"=>"data-reflex-permanent", "target"=>"Draggable#update_record", "args"=>["Applicant", "stage", "offer"], "url"=>"http://localhost:3000/applicants", "tabId"=>"b706f64e-114b-4445-9fda-6835f2fede35", "formData"=>""})
+Applicant Load (1.9ms)  SELECT "applicants".* FROM "applicants" WHERE "applicants"."id" = ? LIMIT ?  [["id", 1], ["LIMIT", 1]]
+↳ app/reflexes/draggable_reflex.rb:6:in `update_record'
+TRANSACTION (0.2ms)  begin transaction
+↳ app/reflexes/draggable_reflex.rb:7:in `update_record'
+Job Load (0.2ms)  SELECT "jobs".* FROM "jobs" WHERE "jobs"."id" = ? LIMIT ?  [["id", 1], ["LIMIT", 1]]
+↳ app/reflexes/draggable_reflex.rb:7:in `update_record'
+Applicant Update (2.9ms)  UPDATE "applicants" SET "stage" = ?, "updated_at" = ? WHERE "applicants"."id" = ?  [["stage", "offer"], ["updated_at", "2022-12-27 12:36:11.437494"], ["id", 1]]
+↳ app/reflexes/draggable_reflex.rb:7:in `update_record'
+TRANSACTION (3.7ms)  commit transaction
+↳ app/reflexes/draggable_reflex.rb:7:in `update_record'
+ActionCable] Broadcasting to StimulusReflex::Channel:: {"cableReady"=>true, "operations"=>[{"name"=>"stimulus-reflex:morph-nothing", "selector"=>nil, "payload"=>{}, "stimulusReflex"=>{"attrs"=>{"data-id"=>"1", "class"=>"flex flex-col pb-2 overflow-auto", "draggable"=>"false", "style"=>"", "checked"=>false, "selected"=>false, "tagName"=>"DIV"}, "datas...
+e7786a4f] 1/1 DraggableReflex#update_record -> document via Nothing Morph (dispatch_event)
+StimulusReflex::Channel transmitting {"cableReady"=>true, "operations"=>[{"name"=>"stimulus-reflex:morph-nothing", "selector"=>nil, "payload"=>{}, "stimulusReflex"=>{"attrs"=>{"data-id"=>"1", "class"=>"flex flex-col pb-2 overflow-auto", "draggable"=>"false", "style"=>"", "checked"=>false, "selected"=>false, "tagName"=>"DIV"}, "datas... (via streamed from StimulusReflex::Channel:)
+```
+
+Response sent on websocket to browser from earlier command - note the morph nothing operation:
+
+```json
+{
+    "identifier": "{\"channel\":\"StimulusReflex::Channel\"}",
+    "message": {
+        "cableReady": true,
+        "operations": [
+            {
+                "name": "stimulus-reflex:morph-nothing",
+                "selector": null,
+                "payload": {},
+                "stimulusReflex": {
+                    "attrs": {
+                        "data-id": "1",
+                        "class": "flex flex-col pb-2 overflow-auto",
+                        "draggable": "false",
+                        "style": "",
+                        "checked": false,
+                        "selected": false,
+                        "tagName": "DIV"
+                    },
+                    "dataset": {
+                        "dataset": {
+                            "data-id": "1"
+                        },
+                        "datasetAll": {}
+                    },
+                    "selectors": [
+                        "body"
+                    ],
+                    "reflexId": "c14ad90c-5175-4eb7-9803-61a5d18fa860",
+                    "resolveLate": false,
+                    "suppressLogging": false,
+                    "xpathController": "/html/body/div[1]/main[1]/div[1]/div[2]/div[1]",
+                    "xpathElement": "//*[@id='applicants-offer']/div[1]",
+                    "innerHtml": "",
+                    "textContent": "",
+                    "reflexController": "draggable",
+                    "permanentAttributeName": "data-reflex-permanent",
+                    "target": "Draggable#update_record",
+                    "args": [
+                        "Applicant",
+                        "stage",
+                        "offer"
+                    ],
+                    "url": "http://localhost:3000/applicants",
+                    "tabId": "b706f64e-114b-4445-9fda-6835f2fede35",
+                    "formData": "",
+                    "morph": "nothing"
+                },
+                "reflexId": "c14ad90c-5175-4eb7-9803-61a5d18fa860",
+                "operation": "dispatchEvent"
+            }
+        ],
+        "version": "5.0.0.pre8"
+    }
+}
+```
 
 ## My Questions and Comments
 
