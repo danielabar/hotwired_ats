@@ -28,6 +28,7 @@
     - [Drag applicants between stages](#drag-applicants-between-stages)
       - [Dragging applicants with Stimulus](#dragging-applicants-with-stimulus)
       - [Sidebar: Drag-and-drop with StimulusReflex](#sidebar-drag-and-drop-with-stimulusreflex)
+  - [Chapter 5 Filtering and sorting with Turbo Frames](#chapter-5-filtering-and-sorting-with-turbo-frames)
   - [My Questions and Comments](#my-questions-and-comments)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -1403,6 +1404,14 @@ This is an alternative way to do drag and drop using StimulusReflex instead of S
 StimulusReflex-enabled Stimulus controllers are very similar to regular Stimulus controllers, with the added bonus of being able to [trigger server-side Ruby code](https://docs.stimulusreflex.com/rtfm/reflexes#calling-a-reflex-in-a-stimulus-controller).
 
 Do this on a branch.
+
+## Chapter 5 Filtering and sorting with Turbo Frames
+
+Will add feature to search for applicants by name, filter by job they applied to, and sort by application date.
+
+Will be using Turbo Frames to display filtered results.
+
+Backend will use [pg_search](https://github.com/Casecommons/pg_search)
 
 ## My Questions and Comments
 

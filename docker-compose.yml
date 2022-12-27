@@ -1,6 +1,18 @@
 version: "3.8"
 
 services:
+  database:
+    image: postgres:14
+    volumes:
+      - learning_pg_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      # Map to something other than default 5432 on host in case Postgres is also running natively on host.
+      - "5435:5432"
+    environment:
+      # Sets the superuser password for PostgreSQL
+      POSTGRES_PASSWORD: shhhhItsASecret
+
   redis:
     image: redis:7.0
     ports:
@@ -8,3 +20,6 @@ services:
       # is also running natively on host.
       # Format is "host:container"
       - "6380:6379"
+
+volumes:
+  learning_pg_data:

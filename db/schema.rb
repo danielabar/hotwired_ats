@@ -11,6 +11,9 @@
 # It's strongly recommended that you check this file into your version control system.
 
 ActiveRecord::Schema[7.0].define(version: 2022_12_25_131946) do
+  # These are extensions that must be enabled in order to support this database
+  enable_extension "plpgsql"
+
   create_table "accounts", force: :cascade do |t|
     t.string "name"
     t.datetime "created_at", null: false
@@ -62,7 +65,7 @@ ActiveRecord::Schema[7.0].define(version: 2022_12_25_131946) do
     t.string "phone"
     t.string "stage"
     t.string "status"
-    t.integer "job_id", null: false
+    t.bigint "job_id", null: false
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
     t.index ["email"], name: "index_applicants_on_email"
@@ -76,7 +79,7 @@ ActiveRecord::Schema[7.0].define(version: 2022_12_25_131946) do
     t.string "status", default: "open", null: false
     t.string "job_type", default: "full_time", null: false
     t.string "location"
-    t.integer "account_id", null: false
+    t.bigint "account_id", null: false
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
     t.index ["account_id"], name: "index_jobs_on_account_id"
@@ -90,7 +93,7 @@ ActiveRecord::Schema[7.0].define(version: 2022_12_25_131946) do
     t.string "reset_password_token"
     t.datetime "reset_password_sent_at"
     t.datetime "remember_created_at"
-    t.integer "account_id"
+    t.bigint "account_id"
     t.string "first_name"
     t.string "last_name"
     t.datetime "created_at", null: false
