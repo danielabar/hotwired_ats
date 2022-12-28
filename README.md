@@ -1668,6 +1668,8 @@ Response sent on websocket to browser from earlier command - note the morph noth
 }
 ```
 
+NOTE that this WS response is sent to *all* connected clients. Eg: If same user is logged in multiple browsers, all will receive this response. However, the UI won't change in a different browser (other than the one user performed drag-drop in) because we're using morph: nothing.
+
 ## My Questions and Comments
 
 1. Original `forms.css` from Chapter 1 has some syntax errors - space between hover and focus and `:` was causing Tailwind to not compile and breaking site styles. Solution is to remove extra spaces, so `hover:...` instead of `hover :...`
