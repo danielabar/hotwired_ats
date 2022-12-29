@@ -5,9 +5,11 @@ const application = Application.start()
 
 // Configure Stimulus development experience
 application.warnings = true
-application.debug    = false
+application.debug    = true
 window.Stimulus      = application
 
-StimulusReflex.initialize(application, { isolate: true, debug: true })
+// https://docs.stimulusreflex.com/appendices/troubleshooting
+StimulusReflex.initialize(application, { debug: true })
+
 
 export { application }

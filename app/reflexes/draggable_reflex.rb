@@ -6,6 +6,7 @@ class DraggableReflex < ApplicationReflex
     resource = resource.constantize.find(id)
     resource.update("#{field}": value)
 
-    morph :nothing
+    # temp experiment to re-render page?
+    # morph :nothing
   end
 end
