@@ -45,13 +45,20 @@ Job.destroy_all
 User.destroy_all
 Account.destroy_all
 
-account = Account.create!(name: Faker::Company.name)
+account1 = Account.create!(name: Faker::Company.name)
+account2 = Account.create!(name: Faker::Company.name)
 
 User.create!(email: "test1@example.com",
              password: "123456",
              first_name: Faker::Name.first_name,
              last_name: Faker::Name.last_name,
-             account: account)
+             account: account1)
+
+User.create!(email: "test2@example.com",
+             password: "123456",
+             first_name: Faker::Name.first_name,
+             last_name: Faker::Name.last_name,
+             account: account2)
 
 10.times do
   Job.create!(title: Faker::Job.title,
@@ -59,18 +66,28 @@ User.create!(email: "test1@example.com",
               job_type: JOB_TYPES[Faker::Number.between(from: 0, to: 1)],
               location: Faker::Address.city,
               description: build_description,
-              account: account)
+              account: account1)
+
+  Job.create!(title: Faker::Job.title,
+              status: JOB_STATUSES[Faker::Number.between(from: 0, to: 2)],
+              job_type: JOB_TYPES[Faker::Number.between(from: 0, to: 1)],
+              location: Faker::Address.city,
+              description: build_description,
+              account: account2)
 end
 jobs = Job.all
 
-20.times do
+30.times do
+  applied_date = Faker::Date.backward(days: Faker::Number.between(from: 1, to: 90))
   applicant = Applicant.create!(first_name: Faker::Name.first_name,
                                 last_name: Faker::Name.last_name,
                                 email: Faker::Internet.safe_email,
                                 phone: Faker::PhoneNumber.phone_number,
                                 stage: APPLICANT_STAGES[Faker::Number.between(from: 0, to: 3)],
                                 status: APPLICANT_STATUSES[Faker::Number.between(from: 0, to: 1)],
-                                job: jobs[Faker::Number.between(from: 0, to: 9)])
+                                job: jobs[Faker::Number.between(from: 0, to: 19)],
+                                created_at: applied_date,
+                                updated_at: applied_date)
   applicant.resume.attach(
     io: File.open("resumes/temp-example-1.pdf"),
     filename: "temp-example-1.pdf",

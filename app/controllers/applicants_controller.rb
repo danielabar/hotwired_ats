@@ -1,4 +1,5 @@
 class ApplicantsController < ApplicationController
+  include Filterable
   before_action :authenticate_user!
   before_action :set_applicant, only: %i[ show edit update destroy change_stage ]
 
@@ -9,22 +10,11 @@ class ApplicantsController < ApplicationController
 
   # GET /applicants or /applicants.json
   def index
-    if search_params.present?
-      @applicants = Applicant.includes(:job)
-      @applicants = @applicants.where(job_id: search_params[:job]) if search_params[:job].present?
-      @applicants = @applicants.where('first_name ILIKE ? OR last_name ILIKE ?', "%#{search_params[:query]}%", "%#{search_params[:query]}%") if search_params[:query].present?
-      if search_params[:sort].present?
-        sort = search_params[:sort].split('-')
-        @applicants = @applicants.order("#{sort[0]} #{sort[1]}")
-      end
-    else
-      @applicants = Applicant.includes(:job).all
-    end
+    @applicants = filter!(Applicant).for_account(current_user.account_id)
   end
 
   # GET /applicants/1 or /applicants/1.json
-  def show
-  end
+  def show; end
 
   # GET /applicants/new
   def new
@@ -39,8 +29,7 @@ class ApplicantsController < ApplicationController
   end
 
   # GET /applicants/1/edit
-  def edit
-  end
+  def edit; end
 
   # POST /applicants or /applicants.json
   def create

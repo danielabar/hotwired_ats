@@ -51,6 +51,9 @@ gem "bootsnap", require: false
 # https://book.hotwiringrails.com/chapters/2
 gem 'devise', branch: 'rails_7', github: 'DavidColby/devise'
 
+# https://github.com/Casecommons/pg_search
+gem 'pg_search'
+
 # Use Sass to process CSS
 # gem "sassc-rails"
 

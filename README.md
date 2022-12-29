@@ -31,6 +31,8 @@
   - [Chapter 5 Filtering and sorting with Turbo Frames](#chapter-5-filtering-and-sorting-with-turbo-frames)
     - [Add filtering and sorting UI](#add-filtering-and-sorting-ui)
     - [Add text search with PgSearch](#add-text-search-with-pgsearch)
+    - [Add filterable concern](#add-filterable-concern)
+    - [Use Kredis to get and set filters](#use-kredis-to-get-and-set-filters)
   - [My Questions and Comments](#my-questions-and-comments)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -42,7 +44,14 @@ Learning Rails with the Hotwire stack, CableReady, and StimulusReflex with [this
 ```
 docker-compose up
 bin/rails db:create
+bin/rails db:seed
 bin/dev
+```
+
+Connect to Postgres in Docker:
+
+```
+psql -h 127.0.0.1 -p 5435 -U hotwired_ats
 ```
 
 ## Chapter 1
@@ -1470,9 +1479,168 @@ Code above works but difficult to read and maintain. Also each request has to re
 
 ### Add text search with PgSearch
 
-First improvement will be to clean up search logic by using the pg_search gem and Postgres full text search.
+First improvement will be to clean up search logic by using the [pg_search](https://github.com/Casecommons/pg_search) gem and Postgres [full text search](https://www.postgresql.org/docs/current/textsearch-intro.html).
 
-Left att Add text search with PgSearch
+Will be using the [search scope](https://github.com/Casecommons/pg_search#multi-search-vs-search-scopes) feature of the gem.
+
+Include `PgSearch` in applicant model and specify a text_search scope:
+
+```ruby
+# app/models/applicant.rb
+class Applicant < ApplicationRecord
+  include PgSearch::Model
+  pg_search_scope :text_search,
+                  against: %i[first_name last_name email],
+                  using: {
+                    tsearch: {
+                      any_word: true,
+                      prefix: true
+                    }
+                  }
+  # ...
+end
+```
+
+Explanation of `pg_search_scope` for applicant model from ChatGPT:
+
+> This code defines a scope named text_search in your Rails model that uses the pg_search gem to search for records based on their first_name, last_name, and email fields. The pg_search_scope method is provided by the pg_search gem and allows you to define a scope that searches for records using full-text search.
+
+> The against option specifies the fields that should be searched. In this case, the first_name, last_name, and email fields will be searched.
+
+> The using option specifies the full-text search method to use. In this case, the tsearch method is being used, which is provided by the pg_search gem. The tsearch method uses the PostgreSQL tsvector type to perform full-text search.
+
+> The any_word option specifies that the search should match any of the words in the search query. For example, if the search query is "John Smith", records with either "John" or "Smith" in the search fields will be returned.
+
+> The prefix option specifies that the search should also match prefixes of the search query words. For example, if the search query is "John", records with "John" or "Johnson" in the search fields will be returned.
+
+> With these options, the text_search scope will search the first_name, last_name, and email fields for records that contain any of the words in the search query, or prefixes of those words.
+
+Replace the `.where` query that searches first and last name with `text_search` scope defined in Applicant model earlier:
+
+```ruby
+# app/controllers/applicants_controller.rb
+
+# Use Postgres full text search
+# @applicants = @applicants.where('first_name ILIKE ? OR last_name ILIKE ?', "%#{search_params[:query]}%", "%#{search_params[:query]}%") if search_params[:query].present?
+@applicants = @applicants.text_search(search_params[:query]) if search_params[:query].present?
+```
+
+At this point, query logic is cleaner, but still refreshing entire page for each new filter request.
+
+### Add filterable concern
+
+First thing want to build re-usable filtering logic with Ruby and Kredis. In typical app, need to make multiple resources filterable/searchable, don't want to re-write this logic over and over.
+
+Build a re-usable Filterable module to include in any controller that needs filtering logic, then add it to ApplicantsController. Later will also add to JobsController.
+
+Will do this in a Rails concern:
+
+```
+touch app/controllers/concerns/filterable.rb
+```
+
+```ruby
+# app/controllers/concerns/filterable.rb
+module Filterable
+  def filter!(resource)
+    store_filters(resource)
+    apply_filters(resource)
+  end
+
+  private
+
+  def store_filters(resource)
+    session["#{resource.to_s.underscore}_filters"] = {} unless session.key?("#{resource.to_s.underscore}_filters")
+
+    session["#{resource.to_s.underscore}_filters"].merge!(filter_params_for(resource))
+  end
+
+  def apply_filters(resource)
+    resource.filter(session["#{resource.to_s.underscore}_filters"])
+  end
+
+  def filter_params_for(resource)
+    params.permit(resource::FILTER_PARAMS)
+  end
+end
+```
+
+**Notes**
+
+* `filter!` method accepts a `resource` argument which is a string that maps to a class name eg: `Applicant`
+* saves any `params` present in request in `session`
+* passes stored filters to model to query for matching records
+* Note that any model classes this will apply to will also need some code changes...
+
+Update applicants controller to include the filterable concern and remove all query logic from `index` method and use the concern:
+
+```ruby
+class ApplicantsController < ApplicationController
+  include Filterable
+
+  def index
+    @applicants = filter!(Applicant)
+  end
+end
+```
+
+Update Applicant model to support filtering by defining `filter` method, scopes and FILTER_PARAMS accepted by the model:
+
+```ruby
+FILTER_PARAMS = %i[query job sort].freeze
+
+scope :for_job, ->(job_id) { job_id.present? ? where(job_id: job_id) : all }
+scope :search, ->(query) { query.present? ? text_search(query) : all }
+scope :sorted, ->(selection) { selection.present? ? apply_sort(selection) : all }
+scope :for_account, ->(account_id) { where(jobs: { account_id: account_id }) }
+
+def self.apply_sort(selection)
+  sort, direction = selection.split('-')
+  order("applicants.#{sort} #{direction}")
+end
+
+def self.filter(filters)
+  includes(:job)
+    .search(filters['query'])
+    .for_job(filters['job'])
+    .sorted(filters['sort'])
+end
+
+def name
+  [first_name, last_name].join(' ')
+end
+```
+
+**Notes**
+
+* `FILTER_PARAMS` contains list of parameters that users are allowed to filter applicants by
+* Defined scopes for each filter option (job, text search, sorting). The scopes check to see if user wants to filter by that and defines a query if needed. This way we can apply any combination of filters without worrying about a nil value in a filter parameter causing unexpected results.
+* Added two class methods `filter`, apply_sort`
+* `filter` takes in the parameters passed to it when `filter!` is called in the controller (defined in the Filterable concern), and chains each scope together.
+
+Now try to use the filters in UI - should behave the same as before. Only change at this point is the server side code is more re-usable.
+
+ISSUE: Currently all users can see all applicants, even if applicant belongs to a different account. Fix this by adding a new scope to Applicant model:
+
+```ruby
+# app/models/applicant.rb
+scope :for_account, ->(account_id) { where(jobs: { account_id: account_id }) }
+```
+
+Update applicants controller to use `for_account` scope in `index` method. This will limit results to jobs in current user's account. Note that the `for_account` scope is applied outside of the `filter!` method because we don't want to allow user's to interact with this filter.
+
+```ruby
+# app/controllers/applicants_controller.rb
+def index
+  @applicants = filter!(Applicant).for_account(current_user.account_id)
+end
+```
+
+Try logging in as either `test1@example.com` or `test2@example.com` - should see different applicants.
+
+### Use Kredis to get and set filters
+
+Left off here.
 
 ## My Questions and Comments
 
