@@ -33,6 +33,8 @@
     - [Add text search with PgSearch](#add-text-search-with-pgsearch)
     - [Add filterable concern](#add-filterable-concern)
     - [Use Kredis to get and set filters](#use-kredis-to-get-and-set-filters)
+    - [Clean up applicant group queries](#clean-up-applicant-group-queries)
+    - [Apply filters with Turbo Frames](#apply-filters-with-turbo-frames)
   - [My Questions and Comments](#my-questions-and-comments)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -52,6 +54,12 @@ Connect to Postgres in Docker:
 
 ```
 psql -h 127.0.0.1 -p 5435 -U hotwired_ats
+```
+
+Connect to [Redis](https://redis.io/docs/getting-started/installation/install-redis-on-mac-os/) in Docker:
+
+```
+redis-cli -h 127.0.0.1 -p 6380
 ```
 
 ## Chapter 1
@@ -1640,7 +1648,285 @@ Try logging in as either `test1@example.com` or `test2@example.com` - should see
 
 ### Use Kredis to get and set filters
 
-Left off here.
+Currently, `Filterable` module saving filters in `session`. For larger scale project, better to use Redis.
+
+As of Rails 7, ships with [kredis](https://github.com/rails/kredis) commented out in Gemfile. Provides DSL for constructing higher level data structures in a Redis key. Useful for storing interesting but non-permanent data, like the filters that a user currently has applied on a page.
+
+Uncomment `kredis` in `Gemfile` and run:
+
+```
+bundle install
+mkdir config/redis
+touch config/redis/shared.yml
+```
+
+I mapped to a different Redis port, see docker-compose.yml.
+
+```yml
+# config/redis/shared.yml
+production: &production
+  url: <%= ENV.fetch("REDIS_URL", "127.0.0.1") %>
+  timeout: 1
+
+development: &development
+  host: <%= ENV.fetch("REDIS_URL", "127.0.0.1") %>
+  port: <%= ENV.fetch("REDIS_PORT", "6380") %>
+  timeout: 1
+
+test:
+  <<: *development
+```
+
+Update filterable concern to use Kredis instead of session:
+
+```ruby
+# app/controllers/concerns/filterable.rb
+module Filterable
+  def filter!(resource)
+    store_filters(resource)
+    apply_filters(resource)
+  end
+
+  private
+
+  def filter_key(resource)
+    "#{resource.to_s.underscore}_filters:#{current_user.id}"
+  end
+
+  def store_filters(resource)
+    key = filter_key(resource)
+    stored_filters = Kredis.hash(key)
+    stored_filters.update(**filter_params_for(resource))
+  end
+
+  def filter_params_for(resource)
+    params.permit(resource::FILTER_PARAMS)
+  end
+
+  def apply_filters(resource)
+    key = filter_key(resource)
+    resource.filter(Kredis.hash(key))
+  end
+end
+```
+
+**Notes**
+
+* Using `Kredis.hash` to retrieve filters
+* Using `Kredis` `update` method to store new filter options in the Kredis key.
+
+Now go to `/applicants` view in browser and use the filters, this time stored in Redis.
+
+Example: Sort by date ascending, job Real-Estate Administrator, applicants with "A" in their name will execute:
+
+```
+GET http://localhost:3000/applicants?sort=created_at-asc&job=166&query=A&button=
+```
+
+Results look like this in UI:
+
+![filter UI](doc-images/ui-filter.png "filter UI")
+
+Connect to Redis to see what got persisted. Recall the keys are built in Filterable concern like this:
+
+```ruby
+def filter_key(resource)
+  "#{resource.to_s.underscore}_filters:#{current_user.id}"
+end
+```
+
+```
+redis-cli -h 127.0.0.1 -p 6380
+
+127.0.0.1:6380> KEYS *
+1) "applicant_filters:20"
+
+127.0.0.1:6380> HGETALL applicant_filters:20
+1) "query"
+2) "A"
+3) "job"
+4) "166"
+5) "sort"
+6) "created_at-asc"
+```
+
+First entry is key in hash, eg: `query`, next entry is value of that key in hash, eg: `A`.
+
+BUT if user visits Applicants view "fresh", i.e. http://localhost:3000/applicants, they'll still see the filtered view because its applying the filters from Redis. In a real app, would need a clear filters. Also, the UI filter/search form is not pre-populating the filters from Redis, so its confusing.
+
+For now, manually remove the filter in Redis if needed, for eg:
+
+```
+DEL applicant_filters:20
+```
+
+### Clean up applicant group queries
+
+Currently, the applicants index view is running `where` queries on the `@applicants` instance given to it by the controller. This is ugly and results in 4 additional SELECT queries, which as data grows, will slow down production:
+
+```erb
+<!-- app/views/applicants/index.html.erb -->
+<% [:application, :interview, :offer, :hired].each do |key| %>
+  <% @applicants.where(stage: key).each do |applicant| %>
+    <%= render "card", applicant: applicant %>
+  <% end %>
+<% end %>
+```
+
+Fix this by using `group_by` method of ActiveRecord in `index` method of applicants controller:
+
+```ruby
+# app/controllers/applicants_controller.rb
+def index
+  @grouped_applicants = filter!(Applicant)
+    .for_account(current_user.account_id)
+    .group_by(&:stage)
+end
+```
+
+`group_by` method is used to group a collection of records by a specific attribute or attributes. It returns a hash with the attribute values as keys and an array of records as the corresponding value. For example, given a collection of Person records with the attributes name and age, you can use the group_by method to group the records by age like this:
+
+```ruby
+people = Person.all
+people_by_age = people.group_by(&:age)
+```
+
+This will return a hash with the ages as keys and an array of Person records as the corresponding value:
+
+```ruby
+{
+  20 => [<Person id: 1, name: "John", age: 20>, <Person id: 2, name: "Jane", age: 20>],
+  30 => [<Person id: 3, name: "Bob", age: 30>, <Person id: 4, name: "Sue", age: 30>]
+}
+```
+
+For our app, `@grouped_applicants` will be a hash with stage names as keys, and applicants in each stage as values, eg:
+
+```ruby
+{ "offer" => [<Applicant>, <Applicant>], "application" => [<Applicant>, <Applicant>], ... }
+```
+
+Update applicants index view to use grouped applicants:
+
+```erb
+<div class="flex items-baseline justify-between">
+  <div
+    class="flex flex-grow mt-4 space-x-6 overflow-auto"
+    data-controller="drag"
+    data-drag-url-value="/applicants/:id/change_stage"
+    data-drag-attribute-value="applicant[stage]"
+  >
+    <% %w[application interview offer hired].each do |stage| %>
+      <div class="flex flex-col flex-shrink-0 w-72">
+        <div class="flex items-center flex-shrink-0 h-10 px-2">
+          <span class="block text-lg font-semibold"><%= stage.to_s.humanize %></span>
+        </div>
+        <div
+          id="applicants-<%= stage %>"
+          data-drag-target="list"
+          data-new-value="<%= stage.to_s %>"
+          class="h-full"
+        >
+          <% @grouped_applicants[stage]&.each do |applicant| %>
+            <%= render "card", applicant: applicant %>
+          <% end %>
+        </div>
+      </div>
+    <% end %>
+  </div>
+</div>
+```
+
+Now should see less queries executed when loading `/applicants` page in browser.
+
+### Apply filters with Turbo Frames
+
+Now we will deal with full page refresh that is currently happening for each click of Filters button.
+
+[Turbo Frames](https://turbo.hotwired.dev/reference/frames) scope navigation to a specific part of the page. Can replace pieces of a page without updating all of it. Useful for features like in-place diting, tabbed content, lazy loading, search/sort/filter data.
+
+Will be updating applicants index page to render Kanban board of applicants by stage inside a Turbo Frame, then update just contents of that frame each time filter submission form changes.
+
+Will also update filter form to auto submit when any filter changes (currently user has to manually click Filter button to submit form).
+
+Create some new partials:
+
+```
+touch app/views/applicants/_list.html.erb
+touch app/views/applicants/_filter_form.html.erb
+```
+
+We'll be moving some of the code currently in applicants index page into these new partials, wrapped in turbo frame tags. The IDs of these tags are important and used in finding the portions of the DOM to be updated.
+
+The listing of applicants in the kanban board will move to the `_list` partial:
+
+```erb
+<!-- app/views/applicants/_list.html.erb -->
+<%= turbo_frame_tag "applicants", class: "flex flex-grow mt-4 space-x-6 overflow-auto", data: { controller: "drag", drag_url_value: "/applicants/:id/change_stage", drag_attribute_value: "applicant[stage]" } do %>
+  <% %w[application interview offer hired].each do |stage| %>
+    <div class="flex flex-col flex-shrink-0 w-72">
+      <div class="flex items-center flex-shrink-0 h-10 px-2">
+        <span class="block text-lg font-semibold"><%= stage.to_s.humanize %></span>
+      </div>
+      <div id="applicants-<%= stage %>" data-drag-target="list" data-new-value="<%= stage.to_s %>" class="h-full">
+        <% @grouped_applicants[stage]&.each do |applicant| %>
+          <%= render "card", applicant: applicant %>
+        <% end %>
+      </div>
+    </div>
+  <% end %>
+<% end %>
+```
+
+**Notes**
+
+* The outer `div` element from original applicants index is being replaced with `<%= turbo_frame_tag... %>`
+* `turbo_frame_tag` is a view helper method from `turbo-rails` gem, which generates `turbo-frame id="applicants"...>` when rendered into markup.
+* Turbo updates are based on id's: When Turbo receives a Turbo Frame response, it expects the body of the response to contain a Turbo Frame with an id that matches the id specified in the request.
+
+The search form will move to the `_filter_form` partial:
+
+```erb
+<!-- app/views/applicants/_filter_form.html.erb -->
+<%= form_with url: applicants_path, method: :get, class: "flex items-baseline", data: { turbo_frame: "applicants" } do |form| %>
+  <div class="form-group mr-2">
+    <%= form.label :sort, class: "sr-only" %>
+    <%= form.select :sort, options_for_select([['Application Date Ascending', 'created_at-asc'], ['Application Date Descending', 'created_at-desc']], params[:sort]) %>
+  </div>
+  <div class="form-group mr-2">
+    <%= form.label :job, class: "sr-only" %>
+    <%= form.select :job, options_for_select(Job.where(account_id: current_user.account_id).order(:title).pluck(:title, :id), params[:job]), { include_blank: 'All Jobs' } %>
+  </div>
+  <div class="form-group mr-2">
+    <%= form.label :query, class: "sr-only" %>
+    <%= form.text_field :query, placeholder: "Search applicants", value: params[:query] %>
+  </div>
+  <%= form.button "Search", class: "btn-primary" %>
+<% end %>
+```
+
+**Notes**
+
+* `data-turbo-frame` attribute has been added to `form_with` helper with a value of `applicants`, which is the id of the turbo-frame specified in the list partial.
+* The `data-turbo-frame` attribute tells Turbo that when this form is submitted, response from server should update the content of the `applicants` Turbo Frame (which we defined in the list partial).
+* We intentionally target a turbo frame from *outside* the frame: If the filter form was inside the `applicants` turbo frame, then Turbo would re-render the form in addition to the list every time form was submitted, which would cause UX issues such as user losing their focus when working with the form.
+
+Update applicants index view to use the new form and list partials:
+
+```erb
+<div class="flex items-baseline justify-between mb-6">
+  <h2 class="mt-6 text-3xl font-extrabold text-gray-700">
+    Applicants
+  </h2>
+  <%= link_to "Add a new applicant", new_applicant_path, class: "btn-primary-outline", data: { action: "click->slideover#open", remote: true } %>
+</div>
+<div class="flex mb-6 justify-end">
+  <%= render "filter_form" %>
+</div>
+<div class="flex items-baseline justify-baseline px-10 md:px-6">
+  <%= render "list", grouped_applicants: @grouped_applicants %>
+</div>
+```
 
 ## My Questions and Comments
 
@@ -1658,3 +1944,4 @@ Left off here.
    2. If it's not scoped to the partial, this could get tricky as the project grows, another developer working on a different feature may add a DOM element by chance that has the same name, and then the wrong element would get updated, breaking this feature.
 11. Why is Redis needed? Would it also be used in the same way in prod?
 12. In Chapter 4 first solution using Stimulus controller, initializeSortable gets called 16 times in total, 4 times for each column.
+13. In Chapter 5, why is Redis used to store the filters? Aren't they in the url?

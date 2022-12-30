@@ -10,7 +10,9 @@ class ApplicantsController < ApplicationController
 
   # GET /applicants or /applicants.json
   def index
-    @applicants = filter!(Applicant).for_account(current_user.account_id)
+    @grouped_applicants = filter!(Applicant)
+                          .for_account(current_user.account_id)
+                          .group_by(&:stage)
   end
 
   # GET /applicants/1 or /applicants/1.json
