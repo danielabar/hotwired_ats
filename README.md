@@ -20,7 +20,7 @@
     - [Slideover edit links](#slideover-edit-links)
     - [Deleting jobs](#deleting-jobs)
     - [Adding jobs with Turbo Streams](#adding-jobs-with-turbo-streams)
-  - [Chapter 4: Creatingand moving applicants](#chapter-4-creatingand-moving-applicants)
+  - [Chapter 4: Creating and moving applicants](#chapter-4-creating-and-moving-applicants)
     - [Build applicant resource](#build-applicant-resource)
     - [Create applicants](#create-applicants)
     - [ActiveStorage resumes](#activestorage-resumes)
@@ -35,6 +35,8 @@
     - [Use Kredis to get and set filters](#use-kredis-to-get-and-set-filters)
     - [Clean up applicant group queries](#clean-up-applicant-group-queries)
     - [Apply filters with Turbo Frames](#apply-filters-with-turbo-frames)
+    - [Automatic form submission with Stimulus](#automatic-form-submission-with-stimulus)
+    - [Cleaning up the filter form](#cleaning-up-the-filter-form)
   - [My Questions and Comments](#my-questions-and-comments)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -853,7 +855,7 @@ Another way to achieve this is with Stimulus, Turbo Streams, and Turbo Frames. D
 
 Author says CableReady more flexible for complex situations.
 
-## Chapter 4: Creatingand moving applicants
+## Chapter 4: Creating and moving applicants
 
 Will introduce an `Applicants` resource representing people that are applying for job postings. Will create a Kanban board with applicants grouped by hiring stage, and an admin can drag and drop applicants between stages.
 
@@ -1927,6 +1929,151 @@ Update applicants index view to use the new form and list partials:
   <%= render "list", grouped_applicants: @grouped_applicants %>
 </div>
 ```
+
+At this point, we have:
+
+* a Turbo Frame to target `<%= turbo_frame_tag "applicants", data: { controller: "drag", drag_url_value: "/applicants/:id/change_stage", drag_attribute_value: "applicant[stage]" } do %>`
+* A form targetting that frame when it submits `<%= form_with url: applicants_path, method: :get, data: { turbo_frame: "applicants" } do |form| %>...`
+
+Form submits to `appilcants#index` action, therefore Rails will re-render the content of the entire page on the server.
+
+Could fix by submitting form to a different controller action that renders a partial instead of full page template that `index` action does, but that creates extra work for every filter interface want to build.
+
+Better solution is to use [custom variant](https://guides.rubyonrails.org/layouts_and_rendering.html#the-variants-option) to respond to Turbo Frame requests with appropriate content, then don't need a separate controller action.
+
+Note that using a variant is an optimization. Even if we didn't do that, Turbo will process the response HTML, extract just the `turbo-frame id="applicants"` and ignore the rest of the content.
+
+But better to keep frame updates efficient, and makes the code easier to understand.
+
+Update ApplicationController to set request variant to `:turbo_frame` when request includes Turbo Frame header. We can determine whether this header is present using `turbo_frame_request?` method from `turbo-rails` gem:
+
+```ruby
+# app/controllers/application_controller.rb
+before_action :turbo_frame_request_variant
+
+private
+
+def turbo_frame_request_variant
+  request.variant = :turbo_frame if turbo_frame_request?
+end
+```
+
+**Notes**
+
+* On each request, Rails will check to see if `Turbo-Frame` http header is present.
+* If yes, request variant will be set, so the code can optionally render a different view for that request
+
+Create a turbo frame variant erb template:
+
+```
+touch app/views/applicants/index.html+turbo_frame.erb
+```
+
+```erb
+<!-- app/views/applicants/index.html+turbo_frame.erb -->
+<%= render "list", grouped_applicants: @grouped_applicants %>
+```
+
+Now try to use the /applicants view in browser and use the filters - content should be updated but only the frame, not full page refresh.
+
+BUT, url no longer updates when form is submitted.
+
+By default, Frame navigation scoped to one piece of the page, therefore Turbo leaves the URL in place when processing a Turbo Frame request. Assumes that user has not navigated to a new page.
+
+But search/filter forms usually do update the URL - supports sharing a set of filters with another user, or bookmarking.
+
+Can configure Turbo to update URL of page from Turbo Frame request using `turbo-action` [data-attribute](https://turbo.hotwired.dev/reference/frames#frame-that-promotes-navigations-to-visits).
+
+Update filter form partial:
+
+```erb
+<!-- app/views/applicants/_filter_form.html.erb -->
+<%= form_with url: applicants_path,
+method: :get,
+class: "flex items-baseline",
+data: {
+  turbo_frame: "applicants",
+  turbo_action: "advance"
+} do |form| %>
+```
+
+Now when submitting filter/search form, URL updates to reflect the search fiilters, eg: `http://localhost:3000/applicants?sort=created_at-asc&job=164&query=&button=`
+
+### Automatic form submission with Stimulus
+
+Add Stimulus controller so that filter form auto submits when any input changed. Will be using lodash to [debounce](https://lodash.com/docs/4.17.15#debounce) events, to ensure form not submitted too often.
+
+```
+rails g stimulus form
+yarn add lodash
+```
+
+```javascript
+// app/javascript/controllers/form_controller.js
+import { Controller } from "stimulus"
+import debounce from "lodash/debounce"
+
+export default class extends Controller {
+  static targets = [ "form" ]
+
+  connect() {
+    this.submit = debounce(this.submit.bind(this), 200)
+  }
+
+  submit() {
+    this.formTarget.requestSubmit()
+  }
+}
+```
+
+**Notes**
+
+* Controller expects a `data-form_target` of "form" in the DOM. We will add data attribute to the filter form.
+* Controller uses [requestSubmit](https://developer.mozilla.org/en-US/docs/Web/API/HTMLFormElement/requestSubmit) to submit form after debounce of 200 ms
+
+Update filter form partial to auto submit form when any input changes:
+
+```erb
+<!-- app/views/applicants/_filter_form.html.erb -->
+<%= form_with url: applicants_path,
+  method: :get,
+  class: "flex items-baseline",
+  data: {
+    controller: "form",
+    form_target: "form",
+    turbo_frame: "applicants",
+    turbo_action: "advance"
+  } do |form| %>
+  <div class="form-group mr-2">
+    <%= form.label :sort, class: "sr-only" %>
+    <%= form.select :sort,
+      options_for_select([['Application Date Ascending', 'created_at-asc'], ['Application Date Descending', 'created_at-desc']], params[:sort]),
+      {},
+      { data: { action: "change->form#submit" } }
+    %>
+  </div>
+  <div class="form-group mr-2">
+    <%= form.label :job, class: "sr-only" %>
+    <%= form.select :job,
+      options_for_select(Job.where(account_id: current_user.account_id).order(:title).pluck(:title, :id), params[:job]),
+      { include_blank: 'All Jobs' },
+      { data: { action: "change->form#submit" } }
+    %>
+  </div>
+  <div class="form-group mr-2">
+    <%= form.label :query, class: "sr-only" %>
+    <%= form.text_field :query, placeholder: "Search applicants", value: params[:query], data: { action: "input->form#submit" } %>
+  </div>
+<% end %>
+```
+
+**Notes**
+
+* Added `data-controller` and `data-form-target` attributes to form element
+* Added `data-action` attribute to each form input to call `submit` method of `form` controller whenever the input receives the `change` event.
+* Removed submit button since it will not be needed
+
+### Cleaning up the filter form
 
 ## My Questions and Comments
 
