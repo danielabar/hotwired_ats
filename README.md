@@ -37,6 +37,7 @@
     - [Apply filters with Turbo Frames](#apply-filters-with-turbo-frames)
     - [Automatic form submission with Stimulus](#automatic-form-submission-with-stimulus)
     - [Cleaning up the filter form](#cleaning-up-the-filter-form)
+    - [Filtering jobs](#filtering-jobs)
   - [My Questions and Comments](#my-questions-and-comments)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -2174,6 +2175,145 @@ Update filter form to use this helper:
   </div>
 <% end %>
 ```
+
+### Filtering jobs
+
+Demonstrate that the filtering we've built up for applicants is re-usable for another resource, specifically Jobs.
+
+Need to add the filter form to jobs index page and update job model to support `Filterable` concern.
+
+Start by adding some partials for the jobs turbo frame response, the jobs filter form, and the jobs list:
+
+```
+touch app/views/jobs/index.html+turbo_frame.erb app/views/jobs/_filter_form.html.erb app/views/jobs/_list.html.erb
+```
+
+The jobs form partial sets the turbo frame to be "jobs", uses the `form` Stimulus controller, and auto submits the form whenever any input changes:
+
+```erb
+<!-- app/views/jobs/_filter_form.html.erb -->
+<%= form_with url: jobs_path, method: :get, class: "flex items-baseline", data: { controller: "form", form_target: "form", turbo_frame: "jobs", turbo_action: "advance" } do |form| %>
+  <div class="form-group mr-2">
+    <%= form.label :sort, class: "sr-only" %>
+    <%= form.select :sort,
+      options_for_select(job_sort_options_for_select, fetch_filter_key("job", current_user.id, 'sort')),
+      {},
+      { data: { action: "change->form#submit" } }
+    %>
+  </div>
+  <div class="form-group mr-2">
+    <%= form.label :status, class: "sr-only" %>
+    <%= form.select :status,
+      options_for_select(status_options_for_select, fetch_filter_key("job", current_user.id, 'status')),
+      { include_blank: 'All Statuses' },
+      { data: { action: "change->form#submit" } }
+    %>
+  </div>
+  <div class="form-group mr-2">
+    <%= form.label :query, class: "sr-only" %>
+    <%= form.text_field :query, placeholder: "Search jobs", value: fetch_filter_key("job", current_user.id, 'query'), data: { action: "input->form#submit" } %>
+  </div>
+<% end %>
+```
+
+The form makes use of two helper methods to populate the options in the dropdowns, define them in the jobs helper:
+
+```ruby
+# app/helpers/jobs_helper.rb
+module JobsHelper
+  def job_sort_options_for_select
+    [
+      ['Posting Date Ascending', 'created_at-asc'],
+      ['Posting Date Descending', 'created_at-desc'],
+      ['Title Ascending', 'title-asc'],
+      ['Title Descending', 'title-desc']
+    ]
+  end
+
+  def status_options_for_select
+    Job.statuses.map { |key, _value| [key.humanize, key] }
+  end
+end
+```
+
+Note that Job model has `status` enum, therefore you can call `Job.statuses` which returns hash of the key/value pairs of the status enum:
+
+```ruby
+Job.statuses
+# => {"draft"=>"draft", "open"=>"open", "closed"=>"closed"}
+```
+
+Here is the list partial, note it specifies a turbo frame of "jobs", which matches what the jobs form partial specified:
+
+```erb
+<!-- app/views/jobs/_list.html.erb -->
+<%= turbo_frame_tag "jobs", class: "divide-y divide-gray-200" do %>
+  <%= render jobs %>
+<% end %>
+```
+
+Update the job index view to use the partials and helpers we defined above:
+
+```erb
+<!-- app/views/jobs/index.html.erb -->
+<div class="flex items-baseline justify-between mb-6">
+  <h2 class="mt-6 text-3xl font-extrabold text-gray-700">
+    Jobs
+  </h2>
+  <%= link_to "Post a new job", new_job_path, class: "btn-primary-outline", data: { action: "mouseup->slideover#open", remote: true } %>
+</div>
+<div class="flex mb-6 justify-end">
+  <%= render "filter_form" %>
+</div>
+<div class="shadow overflow-hidden sm:rounded-md">
+  <%= render "list", jobs: @jobs %>
+</div>
+```
+
+Here is the turbo frame variant of the job index view:
+
+```erb
+<!-- app/views/jobs/index.html+turbo_frame.erb -->
+<%= render "list", jobs: @jobs %>
+```
+
+Update jobs controller `index` method to use `filter!` method from `Filterable` module and to use the `for_account` scope so that a user can only see jobs that belong to their account:
+
+```ruby
+# app/controllers/jobs_controller.rb
+include Filterable
+
+def index
+  @jobs = filter!(Job).for_account(current_user.account_id)
+end
+```
+
+Update job model to define scopes and implement `filter` method so that it can be used from a controller that includes the `Filterable` module:
+
+```ruby
+FILTER_PARAMS = %i[query status sort].freeze
+
+scope :for_account, ->(account_id) { where(account_id: account_id) }
+scope :for_status, ->(status) { status.present? ? where(status: status) : all }
+scope :search_by_title, ->(query) { query.present? ? where('title ILIKE ?', "%#{query}%") : all }
+scope :sorted, ->(selection) { selection.present? ? apply_sort(selection) : all }
+
+def self.filter(filters)
+  search_by_title(filters['query'])
+    .for_status(filters['status'])
+    .sorted(filters['sort'])
+end
+
+def self.apply_sort(selection)
+  return if selection.blank?
+
+  sort, direction = selection.split('-')
+  order("#{sort} #{direction}")
+end
+```
+
+Try out http://localhost:3000/jobs view, should have working filters that auto submit form and only updates the listings, not full page refresh.
+
 ## My Questions and Comments
 
 1. Original `forms.css` from Chapter 1 has some syntax errors - space between hover and focus and `:` was causing Tailwind to not compile and breaking site styles. Solution is to remove extra spaces, so `hover:...` instead of `hover :...`
@@ -2191,3 +2331,5 @@ Update filter form to use this helper:
 11. Why is Redis needed? Would it also be used in the same way in prod?
 12. In Chapter 4 first solution using Stimulus controller, initializeSortable gets called 16 times in total, 4 times for each column.
 13. In Chapter 5, why is Redis used to store the filters? Aren't they in the url?
+14. IDE support? Eg: Given a StimulusJS controller - how to find all the views/partials that are using it? Would need to search for either `data: {controller: "foo"}` or `data-controller="foo"`
+15. Why not using Postgres full text search on Job model? Particularly for rich text `description` field.

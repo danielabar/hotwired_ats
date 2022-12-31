@@ -1,10 +1,12 @@
 class JobsController < ApplicationController
+  include Filterable
+
   before_action :authenticate_user!
   before_action :set_job, only: %i[ show edit update destroy ]
 
   # GET /jobs or /jobs.json
   def index
-    @jobs = Job.all
+    @jobs = filter!(Job).for_account(current_user.account_id)
   end
 
   # GET /jobs/1 or /jobs/1.json
