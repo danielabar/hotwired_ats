@@ -2075,6 +2075,105 @@ Update filter form partial to auto submit form when any input changes:
 
 ### Cleaning up the filter form
 
+Currently in filter form, the sort and job title options are inlined, making view hard to read. Fix by moving select options to helper methods.
+
+```ruby
+# app/helpers/applicants_helper.rb
+module ApplicantsHelper
+  def applicant_sort_options_for_select
+    [
+      ['Application Date Ascending', 'created_at-asc'],
+      ['Application Date Descending', 'created_at-desc']
+    ]
+  end
+end
+```
+
+Let's put the job options in application helper because it will be re-used in other views as well:
+
+```ruby
+# app/helpers/application_helper.rb
+def job_options_for_select(account_id)
+  Job.where(account_id: account_id).order(:title).pluck(:title, :id)
+end
+```
+
+Update form filter partial to use helper methods:
+
+```erb
+<!-- app/views/applicants/_filter_form.html.erb -->
+<%= form_with url: applicants_path, method: :get, class: "flex items-baseline", data: { controller: "form", form_target: "form", turbo_frame: "applicants", turbo_action: "advance" } do |form| %>
+  <div class="form-group mr-2">
+    <%= form.label :sort, class: "sr-only" %>
+    <%= form.select :sort,
+      options_for_select(applicant_sort_options_for_select, params[:sort]),
+      {},
+      { data: { action: "change->form#submit" } }
+    %>
+  </div>
+  <div class="form-group mr-2">
+    <%= form.label :job, class: "sr-only" %>
+    <%= form.select :job,
+      options_for_select(job_options_for_select(current_user.account_id), params[:job]),
+      { include_blank: 'All Jobs' },
+      { data: { action: "change->form#submit" } }
+    %>
+  </div>
+  <div class="form-group mr-2">
+    <%= form.label :query, class: "sr-only" %>
+    <%= form.text_field :query, placeholder: "Search applicants", value: params[:query], data: { action: "input->form#submit" } %>
+  </div>
+<% end %>
+```
+
+**Notes**
+
+* `applicant_sort_options_for_select` is defined in applicants helper
+* `job_options_for_select` is defined in application helper
+
+Another cleanup - ensure default values of form inputs match current state of filter values stored in Kredis. Otherwise if user applies filters, then later comes back to `/applicants` view from top nav bar, the filters are applied, but the form doesn't show it which is confusing.
+
+To fix, need to update form inputs such that they have a value when initially rendered. Start by adding helper to application helper - a convenience method for accessing applied filter for a specific user and resource combination:
+
+```ruby
+# app/helpers/application_helper.rb
+def fetch_filter_key(resource, user_id, key)
+  Kredis.hash("#{resource}_filters:#{user_id}")[key]
+end
+```
+
+Update filter form to use this helper:
+
+```erb
+<%= form_with url: applicants_path, method: :get, class: "flex items-baseline", data: { controller: "form", form_target: "form", turbo_frame: "applicants", turbo_action: "advance" } do |form| %>
+  <div class="form-group mr-2">
+    <%= form.label :sort, class: "sr-only" %>
+    <%= form.select :sort,
+      options_for_select(
+        applicant_sort_options_for_select,
+        fetch_filter_key("applicant", current_user.id, "sort")
+      ),
+      {},
+      { data: { action: "change->form#submit" } }
+    %>
+  </div>
+  <div class="form-group mr-2">
+    <%= form.label :job, class: "sr-only" %>
+    <%= form.select :job,
+      options_for_select(
+        job_options_for_select(current_user.account),
+        fetch_filter_key("applicant", current_user.id, "job")
+      ),
+      { include_blank: 'All Jobs' },
+      { data: { action: "change->form#submit" } }
+    %>
+  </div>
+  <div class="form-group mr-2">
+    <%= form.label :query, class: "sr-only" %>
+    <%= form.text_field :query, placeholder: "Search applicants", value: fetch_filter_key("applicant", current_user.id, "query"), data: { action: "input->form#submit" } %>
+  </div>
+<% end %>
+```
 ## My Questions and Comments
 
 1. Original `forms.css` from Chapter 1 has some syntax errors - space between hover and focus and `:` was causing Tailwind to not compile and breaking site styles. Solution is to remove extra spaces, so `hover:...` instead of `hover :...`
