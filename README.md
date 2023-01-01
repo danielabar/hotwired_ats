@@ -65,6 +65,12 @@ Connect to [Redis](https://redis.io/docs/getting-started/installation/install-re
 redis-cli -h 127.0.0.1 -p 6380
 ```
 
+Delete all filters cached in Redis (application specific):
+
+```shell
+redis-cli -h 127.0.0.1 -p 6380 KEYS *filters* | xargs redis-cli -h 127.0.0.1 -p 6380 DEL
+```
+
 ## Chapter 1
 
 ### The Stack
@@ -2314,11 +2320,14 @@ end
 
 Try out http://localhost:3000/jobs view, should have working filters that auto submit form and only updates the listings, not full page refresh.
 
+[Chapter 6](chapters/chapter-06.md)
+
 ## My Questions and Comments
 
-1. Original `forms.css` from Chapter 1 has some syntax errors - space between hover and focus and `:` was causing Tailwind to not compile and breaking site styles. Solution is to remove extra spaces, so `hover:...` instead of `hover :...`
-2. Having lots of utility classes in erb templates makes it difficult to also notice all the `data...` attributes that are used for reactivity with Stimulus, CableCar etc. This could make it challenging for a new developer joining a project to quickly scan the templates to determine which portions are controlled by what Stimulus controllers.
-3. The flash partial `app/views/shared/_flash.html.erb` is connected to the Stimulus alert controller `app/javascript/controllers/alert_controller.js` via `<div data-controller="alert"...` Is there a naming convention similar to Rails controllers and views? Eg: Should the controller be named `flash_controller` to match the template name?
+1. In the same way that Rails provides an idiomatic way of doing MVC, is there an idiomatic way of doing "reactive" Rails?
+2. Original `forms.css` from Chapter 1 has some syntax errors - space between hover and focus and `:` was causing Tailwind to not compile and breaking site styles. Solution is to remove extra spaces, so `hover:...` instead of `hover :...`
+3. Having lots of utility classes in erb templates makes it difficult to also notice all the `data...` attributes that are used for reactivity with Stimulus, CableCar etc. This could make it challenging for a new developer joining a project to quickly scan the templates to determine which portions are controlled by what Stimulus controllers.
+4. The flash partial `app/views/shared/_flash.html.erb` is connected to the Stimulus alert controller `app/javascript/controllers/alert_controller.js` via `<div data-controller="alert"...` Is there a naming convention similar to Rails controllers and views? Eg: Should the controller be named `flash_controller` to match the template name?
 5. Is it considered good practice to make a Stimulus controller globally available via `<body data-controller="slideover">` in `app/views/layouts/application.html.erb`?
    1. Could this cause confusion when any template or partial anywhere in the app could reference functions in the slideover controller but any developer that didn't add the global might not know where this is defined?
    2. Could this cause the slideover controller to become a "dumping ground" for any other js functions that need to get executed anywhere in the app?
@@ -2328,8 +2337,9 @@ Try out http://localhost:3000/jobs view, should have working filters that auto s
 9. When rendering a CableCar JSON response from a Rails controller such as `.inner_html('#slideover-content', html: html)`, what's the scope of the DOM that will be searched for finding the given selector? i.e. will it match the first `#slideover-content` found *anywhere* in the DOM? Or only the element that is located within the partial `app/views/shared/_slideover.html.erb`? The CableReady doc for [inner_html](https://cableready.stimulusreflex.com/reference/operations/dom-mutations#inner_html) doesn't explain or even have a DOM selector.
    1. Maybe this is the answer from CableReady [usage](https://cableready.stimulusreflex.com/usage): "By default, the selector option provided to DOM-mutating operations expects a CSS selector that resolves to one single DOM element. If multiple elements are returned, only the first one is used."
    2. If it's not scoped to the partial, this could get tricky as the project grows, another developer working on a different feature may add a DOM element by chance that has the same name, and then the wrong element would get updated, breaking this feature.
-11. Why is Redis needed? Would it also be used in the same way in prod?
-12. In Chapter 4 first solution using Stimulus controller, initializeSortable gets called 16 times in total, 4 times for each column.
-13. In Chapter 5, why is Redis used to store the filters? Aren't they in the url?
-14. IDE support? Eg: Given a StimulusJS controller - how to find all the views/partials that are using it? Would need to search for either `data: {controller: "foo"}` or `data-controller="foo"`
-15. Why not using Postgres full text search on Job model? Particularly for rich text `description` field.
+10. Why is Redis needed? Would it also be used in the same way in prod?
+11. In Chapter 4 first solution using Stimulus controller, initializeSortable gets called 16 times in total, 4 times for each column.
+12. In Chapter 5, why is Redis used to store the filters? Aren't they in the url?
+13. IDE support? Eg: Given a StimulusJS controller - how to find all the views/partials that are using it? Would need to search for either `data: {controller: "foo"}` or `data-controller="foo"`
+14. Why not using Postgres full text search on Job model? Particularly for rich text `description` field.
+15. Why is an iframe needed in Chapter 6 to display the resume?

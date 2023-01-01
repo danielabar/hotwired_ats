@@ -40,6 +40,14 @@ def build_description
   desc << "#{Faker::Lorem.paragraph}<br>"
 end
 
+def build_resume_info
+  resume_number = Faker::Number.between(from: 1, to: 2)
+  resume_file_name = "temp-example-#{resume_number}.pdf"
+  resume_file_path = "resumes/#{resume_file_name}"
+  resume_info = Struct.new(:resume_name, :resume_path).new(resume_file_name, resume_file_path)
+  return resume_info
+end
+
 Applicant.destroy_all
 Job.destroy_all
 User.destroy_all
@@ -88,9 +96,11 @@ jobs = Job.all
                                 job: jobs[Faker::Number.between(from: 0, to: 19)],
                                 created_at: applied_date,
                                 updated_at: applied_date)
+
+  resume_info = build_resume_info
   applicant.resume.attach(
-    io: File.open("resumes/temp-example-1.pdf"),
-    filename: "temp-example-1.pdf",
+    io: File.open(resume_info.resume_path),
+    filename: resume_info.resume_name,
     content_type: "application/pdf"
   )
 end
