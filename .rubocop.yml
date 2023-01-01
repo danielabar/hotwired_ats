@@ -33,6 +33,7 @@ Metrics/BlockLength:
   IgnoredMethods: ['describe', 'it', 'context']
   Exclude:
     - 'spec/**/*.rb'
+    - 'config/routes.rb'
 
 Metrics/MethodLength:
   Max: 30

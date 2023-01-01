@@ -1,6 +1,8 @@
+# rubocop:disable Metrics/BlockLength
 Rails.application.routes.draw do
   resources :applicants do
     patch :change_stage, on: :member
+    resources :emails, only: %i[index new create show]
     get :resume, action: :show, controller: 'resumes'
   end
 
@@ -30,3 +32,4 @@ Rails.application.routes.draw do
     root to: 'devise/sessions#new'
   end
 end
+# rubocop:enable Metrics/BlockLength

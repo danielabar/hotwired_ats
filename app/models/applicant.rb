@@ -19,6 +19,7 @@ class Applicant < ApplicationRecord
   validates_presence_of :first_name, :last_name, :email
 
   has_one_attached :resume
+  has_many :emails, dependent: :destroy
 
   pg_search_scope :text_search,
                   against: %i[first_name last_name email],

@@ -6,6 +6,7 @@
   - [Building the applicant show page](#building-the-applicant-show-page)
   - [Displaying resumes](#displaying-resumes)
   - [Build email resource](#build-email-resource)
+  - [Send emails to applicants](#send-emails-to-applicants)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
@@ -194,4 +195,187 @@ After resume loaded, applicant show page for a particular applicant such as http
 
 ### Build email resource
 
-Left here
+Will build email system for outbound emails to applicants, replies from applicants, and replying to replies via email threads.
+
+Store all emails (inbound/outbound) in `emails` table:
+
+```
+bin/rails g model Email applicant:references user:references subject:text sent_at:datetime
+bin/rails db:migrate
+```
+
+Add `body` field as rich text and validation of `subject` field:
+
+```ruby
+# app/models/email.rb
+class Email < ApplicationRecord
+  has_rich_text :body
+
+  belongs_to :applicant
+  belongs_to :user
+
+  validates_presence_of :subject
+end
+```
+
+Update User and Applicant models to specify has_many emails:
+
+```ruby
+# This line goes in both the User model and the Applicant model
+has_many :emails, dependent: :destroy
+```
+
+Generate emails controller:
+
+```
+rails g controller Emails
+touch app/views/emails/_form.html.erb
+```
+
+Update router - notice the emails routes are nested under applicants
+
+```ruby
+resources :applicants do
+  patch :change_stage, on: :member
+  resources :emails, only: %i[index new create show]
+  get :resume, action: :show, controller: 'resumes'
+end
+```
+
+Applicant routes now are:
+
+```
+Prefix Verb   URI Pattern                                                                                       Controller#Action
+change_stage_applicant PATCH  /applicants/:id/change_stage(.:format)                                                            applicants#change_stage
+      applicant_emails GET    /applicants/:applicant_id/emails(.:format)                                                        emails#index
+                       POST   /applicants/:applicant_id/emails(.:format)                                                        emails#create
+   new_applicant_email GET    /applicants/:applicant_id/emails/new(.:format)                                                    emails#new
+       applicant_email GET    /applicants/:applicant_id/emails/:id(.:format)                                                    emails#show
+      applicant_resume GET    /applicants/:applicant_id/resume(.:format)                                                        resumes#show
+            applicants GET    /applicants(.:format)                                                                             applicants#index
+                       POST   /applicants(.:format)                                                                             applicants#create
+         new_applicant GET    /applicants/new(.:format)                                                                         applicants#new
+        edit_applicant GET    /applicants/:id/edit(.:format)                                                                    applicants#edit
+             applicant GET    /applicants/:id(.:format)                                                                         applicants#show
+                       PATCH  /applicants/:id(.:format)                                                                         applicants#update
+                       PUT    /applicants/:id(.:format)                                                                         applicants#update
+                       DELETE /applicants/:id(.:format)                                                                         applicants#destroy
+```
+
+Here is the email form partial:
+
+```erb
+<!-- app/views/emails/_form.html.erb -->
+<%= form_with(model: [applicant, email], id: 'email-form', html: { class: "space-y-6" }, data: { remote: true }) do |form| %>
+  <% if email.errors.any? %>
+    <div id="error_explanation">
+      <h2><%= pluralize(email.errors.count, "error") %> prohibited this email from being saved:</h2>
+
+      <ul>
+        <% email.errors.each do |error| %>
+          <li><%= error.full_message %></li>
+        <% end %>
+      </ul>
+    </div>
+  <% end %>
+
+  <div class="form-group">
+    <%= form.label :subject %>
+    <div class="mt-1">
+      <%= form.text_field :subject %>
+    </div>
+  </div>
+
+  <div class="form-group">
+    <%= form.rich_text_area :body %>
+  </div>
+
+  <%= form.submit 'Send email', class: 'btn-primary float-right' %>
+<% end %>
+```
+
+**Notes**
+
+* Mrujs + CableCar will be handling form submission that's why data `remote: true` is set on form element.
+* Using Trix editor via `form.rich_text_area` to allow some formatting of email `body`.
+
+Update emails controller `new`, `create` actions - similar CableCar logic used for Jobs, Applicants:
+
+```ruby
+# app/controllers/emails_controller.rb
+class EmailsController < ApplicationController
+  before_action :authenticate_user!
+  before_action :set_applicant
+
+  def new
+    @email = Email.new
+    html = render_to_string(partial: 'form', locals: { email: @email, applicant: @applicant })
+    render operations: cable_car
+      .inner_html('#slideover-content', html: html)
+      .text_content('#slideover-header', text: "Email #{@applicant.name}")
+  end
+
+  def create
+    @email = Email.new(email_params)
+
+    @email.applicant = @applicant
+    @email.user = current_user
+    if @email.save
+      html = render_to_string(partial: 'shared/flash', locals: { level: :success, content: 'Email sent!' })
+      render operations: cable_car
+        .inner_html('#flash-container', html: html)
+        .dispatch_event(name: 'submit:success')
+    else
+      html = render_to_string(partial: 'form', locals: { applicant: @applicant, email: @email })
+      render operations: cable_car
+        .inner_html('#email-form', html: html), status: :unprocessable_entity
+    end
+  end
+
+  private
+
+  def set_applicant
+    @applicant = Applicant.find(params[:applicant_id])
+  end
+
+  def email_params
+    params.require(:email).permit(:subject, :body)
+  end
+end
+```
+
+**Notes**
+
+* Difference from applicants and jobs controller is `create` action renders flash message confirming email sent. Use this technique when results of user's actions are not obvious to them.
+* Email hasn't really been sent yet, only saved to `emails` table, will deal with this in next section.
+
+Make the email form render in slideover by updating Send Email link on applicant show page:
+
+```erb
+<%= link_to "Send email",
+new_applicant_email_path(@applicant),
+class: "btn-primary-outline",
+data: {
+  action: "click->slideover#open",
+  remote: true
+} %>
+```
+
+### Send emails to applicants
+
+Create a new [mailer](https://guides.rubyonrails.org/action_mailer_basics.html#create-the-mailer):
+
+```
+bin/rails g mailer Applicant contact
+  create  app/mailers/applicant_mailer.rb
+  invoke  erb
+  create    app/views/applicant_mailer
+  create    app/views/applicant_mailer/contact.text.erb
+  create    app/views/applicant_mailer/contact.html.erb
+```
+
+**Notes**
+
+* Mailer used to send outbound emails to applicants
+* Email content will be from `rich_text :body` field from Email model
+
