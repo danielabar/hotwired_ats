@@ -38,6 +38,7 @@
     - [Automatic form submission with Stimulus](#automatic-form-submission-with-stimulus)
     - [Cleaning up the filter form](#cleaning-up-the-filter-form)
     - [Filtering jobs](#filtering-jobs)
+  - [Chapter 6: Viewing and contacting applicants](#chapter-6-viewing-and-contacting-applicants)
   - [My Questions and Comments](#my-questions-and-comments)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -70,6 +71,10 @@ Delete all filters cached in Redis (application specific):
 ```shell
 redis-cli -h 127.0.0.1 -p 6380 KEYS *filters* | xargs redis-cli -h 127.0.0.1 -p 6380 DEL
 ```
+
+If using PGAdmin4, create connection as follows:
+
+![pgadmin4 connect](doc-images/pgadmin4-connect.png "pgadmin4 connect")
 
 ## Chapter 1
 
@@ -2319,6 +2324,8 @@ end
 ```
 
 Try out http://localhost:3000/jobs view, should have working filters that auto submit form and only updates the listings, not full page refresh.
+
+## Chapter 6: Viewing and contacting applicants
 
 [Chapter 6](chapters/chapter-06.md)
 
