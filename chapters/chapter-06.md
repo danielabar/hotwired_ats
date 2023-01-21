@@ -8,6 +8,7 @@
   - [Build email resource](#build-email-resource)
   - [Send emails to applicants](#send-emails-to-applicants)
   - [Receive and process inbound email](#receive-and-process-inbound-email)
+  - [Display previous emails on applicant record](#display-previous-emails-on-applicant-record)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
@@ -583,4 +584,260 @@ Output:
 create  app/mailboxes/applicant_replies_mailbox.rb
 ```
 
-Left at: The installer automatically adds an
+Now we have an `ApplicationMailbox` to setup routing rules for inbound emails. Update it to add new rule for `ApplicantReplies` mailbox, telling it that any inbound emails with `reply` in the `to` address should be sent to the `ApplicantReplies` mailbox for processing and delivering to the right user:
+
+```ruby
+# app/mailboxes/application_mailbox.rb
+class ApplicationMailbox < ActionMailbox::Base
+  routing /reply/i => :applicant_replies
+end
+```
+
+And here is the applicant replies mailbox:
+
+```ruby
+# app/mailboxes/applicant_replies_mailbox.rb
+class ApplicantRepliesMailbox < ApplicationMailbox
+  ALIASED_USER = /reply-(.+)@hotwiringrails.com/i
+
+  before_processing :set_applicant
+  before_processing :set_user
+
+  def process
+    email = build_email
+    email.body = mail.parts.present? ? mail.parts[0].body.decoded : mail.decoded
+    email.save
+  end
+
+  private
+
+  def build_email
+    Email.new(
+      user_id: @user.id,
+      applicant_id: @applicant.id,
+      subject: mail.subject
+    )
+  end
+
+  def set_applicant
+    @applicant = Applicant.find_by(email: mail.from)
+  end
+
+  def set_user
+    recipient = mail.recipients.find{ |r| ALIASED_USER.match?(r) }
+    @user = User.find_by(email_alias: recipient[ALIASED_USER, 1])
+  end
+end
+```
+
+Add `email_alias` column to Users table in support of above routing logic
+
+```
+bin/rails g migration AddEmailAliasToUser email_alias:string:index
+bin/rails db:migrate
+```
+
+Populate new email_alias column in User model callback:
+
+```ruby
+# app/models/user.rb
+after_create_commit :generate_alias
+
+def generate_alias
+  email_alias = "#{email.split('@')[0]}-#{id}"
+  update_column(:email_alias, email_alias)
+end
+```
+
+Update existing users to populate alias column in Rails console:
+
+```ruby
+User.all.each{ |user| user.generate_alias && user.save }
+```
+
+Update ApplicantMailer so that replies are sent to email address that matches alias. Notice the `from` address is now using the alias:
+
+```ruby
+# app/mailers/applicant_mailer.rb
+class ApplicantMailer < ApplicationMailer
+  def contact(email:)
+    @email = email
+    @applicant = @email.applicant
+    @user = @email.user
+
+    mail(
+      to: @applicant.email,
+      from: "reply-#{@user.email_alias}@hotwiringrails.com",
+      subject: @email.subject
+    )
+  end
+end
+```
+
+Update Email table/model with `email_type` to distinguish inbound vs outbound:
+
+```
+bin/rails g migration AddEmailTypeToEmails email_type:string
+bin/rails db:migrate
+```
+
+```ruby
+after_create_commit :send_email, if: :outbound?
+
+enum email_type: {
+  outbound: 'outbound',
+  inbound: 'inbound'
+}
+```
+
+Update ApplicantReplies mailbox to set email type for inbound procesing:
+
+```ruby
+# app/mailboxes/applicant_replies_mailbox.rb
+def build_email
+  Email.new(
+    user_id: @user.id,
+    applicant_id: @applicant.id,
+    subject: mail.subject,
+    email_type: 'inbound'
+  )
+end
+```
+
+Update EmailsController to set outbound type:
+
+```ruby
+# app/controllers/emails_controller.rb
+def create
+  @email = Email.new(email_params)
+  @email.email_type = 'outbound'
+  # Snip
+end
+```
+
+To try it out locally, use Rails Conductor at: http://localhost:3000/rails/conductor/action_mailbox/inbound_emails/new:
+
+* from address should matche the email address of an applicant in the database
+* to address should include an alias for a user in the database and matches the routing and regex rules we defined when we set up the mailbox.
+
+![rails conductor](../doc-images/rails-conductor.png "rails conductor")
+
+After submitting form, Rails server output:
+
+```
+Started POST "/rails/conductor/action_mailbox/inbound_emails" for ::1 at 2023-01-21 07:41:49 -0500
+Processing by Rails::Conductor::ActionMailbox::InboundEmailsController#create as HTML
+  Parameters: {"authenticity_token"=>"[FILTERED]", "mail"=>{"from"=>"courtney@example.net", "to"=>"reply-test1-26@hotwiringrails.com", "cc"=>"", "bcc"=>"", "x_original_to"=>"", "in_reply_to"=>"", "subject"=>"test of chapter 6", "body"=>"foo bar whatever blah blah", "attachments"=>[""]}, "commit"=>"Deliver inbound email"}
+  TRANSACTION (1.7ms)  BEGIN
+  ActiveStorage::Blob Create (18.0ms)  INSERT INTO "active_storage_blobs" ("key", "filename", "content_type", "metadata", "service_name", "byte_size", "checksum", "created_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING "id"  [["key", "o585a0y4t378m0qyjetiihn7k9uo"], ["filename", "message.eml"], ["content_type", "message/rfc822"], ["metadata", "{\"identified\":true}"], ["service_name", "local"], ["byte_size", 361], ["checksum", "ZLddRIJwZEvqhhDfX2Nsqw=="], ["created_at", "2023-01-21 12:41:49.658233"]]
+  TRANSACTION (19.7ms)  COMMIT
+  Disk Storage (1.2ms) Uploaded file to key: o585a0y4t378m0qyjetiihn7k9uo (checksum: ZLddRIJwZEvqhhDfX2Nsqw==)
+  TRANSACTION (11.4ms)  BEGIN
+  ActionMailbox::InboundEmail Create (7.5ms)  INSERT INTO "action_mailbox_inbound_emails" ("status", "message_id", "message_checksum", "created_at", "updated_at") VALUES ($1, $2, $3, $4, $5) RETURNING "id"  [["status", 0], ["message_id", "63cbdd8d5f7c1_300d47a4116a4@Danielas-Mac-mini.local.mail"], ["message_checksum", "b62e6f31e895a3f776ea00d9fc8d400e87cdfc0e"], ["created_at", "2023-01-21 12:41:49.752201"], ["updated_at", "2023-01-21 12:41:49.752201"]]
+  ActiveStorage::Blob Load (14.0ms)  SELECT "active_storage_blobs".* FROM "active_storage_blobs" INNER JOIN "active_storage_attachments" ON "active_storage_blobs"."id" = "active_storage_attachments"."blob_id" WHERE "active_storage_attachments"."record_id" = $1 AND "active_storage_attachments"."record_type" = $2 AND "active_storage_attachments"."name" = $3 LIMIT $4  [["record_id", 1], ["record_type", "ActionMailbox::InboundEmail"], ["name", "raw_email"], ["LIMIT", 1]]
+  ActiveStorage::Attachment Load (2.0ms)  SELECT "active_storage_attachments".* FROM "active_storage_attachments" WHERE "active_storage_attachments"."record_id" = $1 AND "active_storage_attachments"."record_type" = $2 AND "active_storage_attachments"."name" = $3 LIMIT $4  [["record_id", 1], ["record_type", "ActionMailbox::InboundEmail"], ["name", "raw_email"], ["LIMIT", 1]]
+  ActiveStorage::Attachment Create (7.7ms)  INSERT INTO "active_storage_attachments" ("name", "record_type", "record_id", "blob_id", "created_at") VALUES ($1, $2, $3, $4, $5) RETURNING "id"  [["name", "raw_email"], ["record_type", "ActionMailbox::InboundEmail"], ["record_id", 1], ["blob_id", 291], ["created_at", "2023-01-21 12:41:50.159267"]]
+  ActionMailbox::InboundEmail Update (14.0ms)  UPDATE "action_mailbox_inbound_emails" SET "updated_at" = $1 WHERE "action_mailbox_inbound_emails"."id" = $2  [["updated_at", "2023-01-21 12:41:50.186861"], ["id", 1]]
+  TRANSACTION (4.5ms)  COMMIT
+[ActiveJob] Enqueued ActionMailbox::RoutingJob (Job ID: fc6ab289-a2f9-4ae5-8d15-c8d8a2dfab4e) to Async(default) with arguments: #<GlobalID:0x0000000107018f30 @uri=#<URI::GID gid://hotwired-ats/ActionMailbox::InboundEmail/1>>
+  TRANSACTION (29.1ms)  BEGIN
+  ActiveStorage::Blob Update (2.7ms)  UPDATE "active_storage_blobs" SET "metadata" = $1 WHERE "active_storage_blobs"."id" = $2  [["metadata", "{\"identified\":true,\"analyzed\":true}"], ["id", 291]]
+  TRANSACTION (11.0ms)  COMMIT
+Redirected to http://localhost:3000/rails/conductor/action_mailbox/inbound_emails/1
+Completed 302 Found in 1119ms (ActiveRecord: 234.2ms | Allocations: 60045)
+
+
+Started GET "/rails/conductor/action_mailbox/inbound_emails/1" for ::1 at 2023-01-21 07:41:50 -0500
+Processing by Rails::Conductor::ActionMailbox::InboundEmailsController#show as HTML
+  Parameters: {"id"=>"1"}
+  ActionMailbox::InboundEmail Load (2.1ms)  SELECT "action_mailbox_inbound_emails".* FROM "action_mailbox_inbound_emails" WHERE "action_mailbox_inbound_emails"."id" = $1 LIMIT $2  [["id", 1], ["LIMIT", 1]]
+[ActiveJob] [ActionMailbox::RoutingJob] [fc6ab289-a2f9-4ae5-8d15-c8d8a2dfab4e]   ActionMailbox::InboundEmail Load (5.5ms)  SELECT "action_mailbox_inbound_emails".* FROM "action_mailbox_inbound_emails" WHERE "action_mailbox_inbound_emails"."id" = $1 LIMIT $2  [["id", 1], ["LIMIT", 1]]
+  Rendering layout /Users/dbaron/.rbenv/versions/3.1.2/lib/ruby/gems/3.1.0/gems/actionmailbox-7.0.4/app/views/layouts/rails/conductor.html.erb
+  Rendering /Users/dbaron/.rbenv/versions/3.1.2/lib/ruby/gems/3.1.0/gems/actionmailbox-7.0.4/app/views/rails/conductor/action_mailbox/inbound_emails/show.html.erb within layouts/rails/conductor
+[ActiveJob] [ActionMailbox::RoutingJob] [fc6ab289-a2f9-4ae5-8d15-c8d8a2dfab4e] Performing ActionMailbox::RoutingJob (Job ID: fc6ab289-a2f9-4ae5-8d15-c8d8a2dfab4e) from Async(default) enqueued at 2023-01-21T12:41:50Z with arguments: #<GlobalID:0x0000000107141c18 @uri=#<URI::GID gid://hotwired-ats/ActionMailbox::InboundEmail/1>>
+  ActiveStorage::Attachment Load (103.8ms)  SELECT "active_storage_attachments".* FROM "active_storage_attachments" WHERE "active_storage_attachments"."record_id" = $1 AND "active_storage_attachments"."record_type" = $2 AND "active_storage_attachments"."name" = $3 LIMIT $4  [["record_id", 1], ["record_type", "ActionMailbox::InboundEmail"], ["name", "raw_email"], ["LIMIT", 1]]
+  ActiveStorage::Blob Load (3.2ms)  SELECT "active_storage_blobs".* FROM "active_storage_blobs" WHERE "active_storage_blobs"."id" = $1 LIMIT $2  [["id", 291], ["LIMIT", 1]]
+  Disk Storage (0.2ms) Downloaded file from key: o585a0y4t378m0qyjetiihn7k9uo
+  Rendered /Users/dbaron/.rbenv/versions/3.1.2/lib/ruby/gems/3.1.0/gems/actionmailbox-7.0.4/app/views/rails/conductor/action_mailbox/inbound_emails/show.html.erb within layouts/rails/conductor (Duration: 770.2ms | Allocations: 230218)
+  Rendered layout /Users/dbaron/.rbenv/versions/3.1.2/lib/ruby/gems/3.1.0/gems/actionmailbox-7.0.4/app/views/layouts/rails/conductor.html.erb (Duration: 770.6ms | Allocations: 230300)
+Completed 200 OK in 820ms (Views: 683.6ms | ActiveRecord: 109.1ms | Allocations: 233373)
+
+
+[ActiveJob] [ActionMailbox::RoutingJob] [fc6ab289-a2f9-4ae5-8d15-c8d8a2dfab4e]   ActiveStorage::Attachment Load (57.8ms)  SELECT "active_storage_attachments".* FROM "active_storage_attachments" WHERE "active_storage_attachments"."record_id" = $1 AND "active_storage_attachments"."record_type" = $2 AND "active_storage_attachments"."name" = $3 LIMIT $4  [["record_id", 1], ["record_type", "ActionMailbox::InboundEmail"], ["name", "raw_email"], ["LIMIT", 1]]
+[ActiveJob] [ActionMailbox::RoutingJob] [fc6ab289-a2f9-4ae5-8d15-c8d8a2dfab4e]   ActiveStorage::Blob Load (6.0ms)  SELECT "active_storage_blobs".* FROM "active_storage_blobs" WHERE "active_storage_blobs"."id" = $1 LIMIT $2  [["id", 291], ["LIMIT", 1]]
+[ActiveJob] [ActionMailbox::RoutingJob] [fc6ab289-a2f9-4ae5-8d15-c8d8a2dfab4e]   Disk Storage (0.1ms) Downloaded file from key: o585a0y4t378m0qyjetiihn7k9uo
+[ActiveJob] [ActionMailbox::RoutingJob] [fc6ab289-a2f9-4ae5-8d15-c8d8a2dfab4e]   TRANSACTION (8.3ms)  BEGIN
+[ActiveJob] [ActionMailbox::RoutingJob] [fc6ab289-a2f9-4ae5-8d15-c8d8a2dfab4e]   ActionMailbox::InboundEmail Update (30.5ms)  UPDATE "action_mailbox_inbound_emails" SET "status" = $1, "updated_at" = $2 WHERE "action_mailbox_inbound_emails"."id" = $3  [["status", 1], ["updated_at", "2023-01-21 12:41:52.471789"], ["id", 1]]
+[ActiveJob] [ActionMailbox::RoutingJob] [fc6ab289-a2f9-4ae5-8d15-c8d8a2dfab4e]   TRANSACTION (4.8ms)  COMMIT
+[ActiveJob] [ActionMailbox::RoutingJob] [fc6ab289-a2f9-4ae5-8d15-c8d8a2dfab4e]   Applicant Load (3.8ms)  SELECT "applicants".* FROM "applicants" WHERE "applicants"."email" = $1 LIMIT $2  [["email", "courtney@example.net"], ["LIMIT", 1]]
+[ActiveJob] [ActionMailbox::RoutingJob] [fc6ab289-a2f9-4ae5-8d15-c8d8a2dfab4e]   ↳ app/mailboxes/applicant_replies_mailbox.rb:25:in `set_applicant'
+[ActiveJob] [ActionMailbox::RoutingJob] [fc6ab289-a2f9-4ae5-8d15-c8d8a2dfab4e]   User Load (11.6ms)  SELECT "users".* FROM "users" WHERE "users"."email_alias" = $1 LIMIT $2  [["email_alias", "test1-26"], ["LIMIT", 1]]
+[ActiveJob] [ActionMailbox::RoutingJob] [fc6ab289-a2f9-4ae5-8d15-c8d8a2dfab4e]   ↳ app/mailboxes/applicant_replies_mailbox.rb:30:in `set_user'
+[ActiveJob] [ActionMailbox::RoutingJob] [fc6ab289-a2f9-4ae5-8d15-c8d8a2dfab4e]   TRANSACTION (3.2ms)  BEGIN
+[ActiveJob] [ActionMailbox::RoutingJob] [fc6ab289-a2f9-4ae5-8d15-c8d8a2dfab4e]   ↳ app/mailboxes/applicant_replies_mailbox.rb:10:in `process'
+[ActiveJob] [ActionMailbox::RoutingJob] [fc6ab289-a2f9-4ae5-8d15-c8d8a2dfab4e]   Applicant Load (2.4ms)  SELECT "applicants".* FROM "applicants" WHERE "applicants"."id" = $1 LIMIT $2  [["id", 263], ["LIMIT", 1]]
+[ActiveJob] [ActionMailbox::RoutingJob] [fc6ab289-a2f9-4ae5-8d15-c8d8a2dfab4e]   ↳ app/mailboxes/applicant_replies_mailbox.rb:10:in `process'
+[ActiveJob] [ActionMailbox::RoutingJob] [fc6ab289-a2f9-4ae5-8d15-c8d8a2dfab4e]   User Load (16.5ms)  SELECT "users".* FROM "users" WHERE "users"."id" = $1 LIMIT $2  [["id", 26], ["LIMIT", 1]]
+[ActiveJob] [ActionMailbox::RoutingJob] [fc6ab289-a2f9-4ae5-8d15-c8d8a2dfab4e]   ↳ app/mailboxes/applicant_replies_mailbox.rb:10:in `process'
+[ActiveJob] [ActionMailbox::RoutingJob] [fc6ab289-a2f9-4ae5-8d15-c8d8a2dfab4e]   Email Create (18.4ms)  INSERT INTO "emails" ("applicant_id", "user_id", "subject", "sent_at", "created_at", "updated_at", "email_type") VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING "id"  [["applicant_id", 263], ["user_id", 26], ["subject", "test of chapter 6"], ["sent_at", nil], ["created_at", "2023-01-21 12:41:53.183820"], ["updated_at", "2023-01-21 12:41:53.183820"], ["email_type", "inbound"]]
+[ActiveJob] [ActionMailbox::RoutingJob] [fc6ab289-a2f9-4ae5-8d15-c8d8a2dfab4e]   ↳ app/mailboxes/applicant_replies_mailbox.rb:10:in `process'
+[ActiveJob] [ActionMailbox::RoutingJob] [fc6ab289-a2f9-4ae5-8d15-c8d8a2dfab4e]   ActionText::RichText Create (18.1ms)  INSERT INTO "action_text_rich_texts" ("name", "body", "record_type", "record_id", "created_at", "updated_at") VALUES ($1, $2, $3, $4, $5, $6) RETURNING "id"  [["name", "body"], ["body", "foo bar whatever blah blah"], ["record_type", "Email"], ["record_id", 4], ["created_at", "2023-01-21 12:41:53.260740"], ["updated_at", "2023-01-21 12:41:53.260740"]]
+[ActiveJob] [ActionMailbox::RoutingJob] [fc6ab289-a2f9-4ae5-8d15-c8d8a2dfab4e]   ↳ app/mailboxes/applicant_replies_mailbox.rb:10:in `process'
+[ActiveJob] [ActionMailbox::RoutingJob] [fc6ab289-a2f9-4ae5-8d15-c8d8a2dfab4e]   ActiveStorage::Attachment Load (1.9ms)  SELECT "active_storage_attachments".* FROM "active_storage_attachments" WHERE "active_storage_attachments"."record_id" = $1 AND "active_storage_attachments"."record_type" = $2 AND "active_storage_attachments"."name" = $3  [["record_id", 235], ["record_type", "ActionText::RichText"], ["name", "embeds"]]
+[ActiveJob] [ActionMailbox::RoutingJob] [fc6ab289-a2f9-4ae5-8d15-c8d8a2dfab4e]   ↳ app/mailboxes/applicant_replies_mailbox.rb:10:in `process'
+[ActiveJob] [ActionMailbox::RoutingJob] [fc6ab289-a2f9-4ae5-8d15-c8d8a2dfab4e]   Email Update (27.1ms)  UPDATE "emails" SET "updated_at" = $1 WHERE "emails"."id" = $2  [["updated_at", "2023-01-21 12:41:53.296337"], ["id", 4]]
+[ActiveJob] [ActionMailbox::RoutingJob] [fc6ab289-a2f9-4ae5-8d15-c8d8a2dfab4e]   ↳ app/mailboxes/applicant_replies_mailbox.rb:10:in `process'
+[ActiveJob] [ActionMailbox::RoutingJob] [fc6ab289-a2f9-4ae5-8d15-c8d8a2dfab4e]   TRANSACTION (8.0ms)  COMMIT
+[ActiveJob] [ActionMailbox::RoutingJob] [fc6ab289-a2f9-4ae5-8d15-c8d8a2dfab4e]   ↳ app/mailboxes/applicant_replies_mailbox.rb:10:in `process'
+[ActiveJob] [ActionMailbox::RoutingJob] [fc6ab289-a2f9-4ae5-8d15-c8d8a2dfab4e]   TRANSACTION (16.2ms)  BEGIN
+[ActiveJob] [ActionMailbox::RoutingJob] [fc6ab289-a2f9-4ae5-8d15-c8d8a2dfab4e]   ActionMailbox::InboundEmail Update (14.9ms)  UPDATE "action_mailbox_inbound_emails" SET "status" = $1, "updated_at" = $2 WHERE "action_mailbox_inbound_emails"."id" = $3  [["status", 2], ["updated_at", "2023-01-21 12:41:53.361423"], ["id", 1]]
+[ActiveJob] [ActionMailbox::RoutingJob] [fc6ab289-a2f9-4ae5-8d15-c8d8a2dfab4e]   TRANSACTION (5.1ms)  COMMIT
+[ActiveJob] [ActionMailbox::RoutingJob] [fc6ab289-a2f9-4ae5-8d15-c8d8a2dfab4e] Enqueued ActionMailbox::IncinerationJob (Job ID: 5089ef93-2d34-49db-b73b-44d508d052f4) to Async(default) at 2023-02-20 12:41:53 UTC with arguments: #<GlobalID:0x0000000108131d08 @uri=#<URI::GID gid://hotwired-ats/ActionMailbox::InboundEmail/1>>
+[ActiveJob] [ActionMailbox::RoutingJob] [fc6ab289-a2f9-4ae5-8d15-c8d8a2dfab4e] Performed ActionMailbox::RoutingJob (Job ID: fc6ab289-a2f9-4ae5-8d15-c8d8a2dfab4e) from Async(default) in 3159.37ms
+```
+
+UI shows:
+
+![local email pending](../doc-images/local-email-pending.png "local email pending")
+
+In Rails console, check last Email - its an inbound and related to applicant and user filled out in the conductor form:
+
+```ruby
+irb(main):008:0> Email.last
+  Email Load (10.2ms)  SELECT "emails".* FROM "emails" ORDER BY "emails"."id" DESC LIMIT $1  [["LIMIT", 1]]
+=>
+#<Email:0x0000000108f17a08
+ id: 4,
+ applicant_id: 263,
+ user_id: 26,
+ subject: "test of chapter 6",
+ sent_at: nil,
+ created_at: Sat, 21 Jan 2023 12:41:53.183820000 UTC +00:00,
+ updated_at: Sat, 21 Jan 2023 12:41:53.296337000 UTC +00:00,
+ email_type: "inbound">
+
+irb(main):009:0> Email.last.applicant
+  Email Load (6.6ms)  SELECT "emails".* FROM "emails" ORDER BY "emails"."id" DESC LIMIT $1  [["LIMIT", 1]]
+  Applicant Load (2.0ms)  SELECT "applicants".* FROM "applicants" WHERE "applicants"."id" = $1 LIMIT $2  [["id", 263], ["LIMIT", 1]]
+=>
+#<Applicant:0x00000001084f3d38
+ id: 263,
+ first_name: "Chi",
+ last_name: "Schroeder",
+ email: "courtney@example.net",
+ phone: "(451) 733-0461 x00030",
+ stage: "application",
+ status: "inactive",
+ job_id: 231,
+ created_at: Fri, 23 Dec 2022 00:00:00.000000000 UTC +00:00,
+ updated_at: Sun, 01 Jan 2023 14:41:17.079990000 UTC +00:00>
+
+irb(main):011:0> Email.last.user
+  Email Load (1.9ms)  SELECT "emails".* FROM "emails" ORDER BY "emails"."id" DESC LIMIT $1  [["LIMIT", 1]]
+  User Load (1.7ms)  SELECT "users".* FROM "users" WHERE "users"."id" = $1 LIMIT $2  [["id", 26], ["LIMIT", 1]]
+=> #<User id: 26, email: "test1@example.com", account_id: 27, first_name: "Fredda", last_name: "Satterfield", created_at: "2023-01-01 14:41:15.303500000 +0000", updated_at: "2023-01-01 14:41:15.303500000 +0000", email_alias: "test1-26">
+```
+
+## Display previous emails on applicant record
+
+In this section, will display emails on applicant show page in UI.

@@ -11,4 +11,11 @@ class User < ApplicationRecord
   accepts_nested_attributes_for :account
 
   has_many :emails, dependent: :destroy
+
+  after_create_commit :generate_alias
+
+  def generate_alias
+    email_alias = "#{email.split('@')[0]}-#{id}"
+    update_column(:email_alias, email_alias)
+  end
 end
