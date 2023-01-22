@@ -9,6 +9,7 @@
   - [Send emails to applicants](#send-emails-to-applicants)
   - [Receive and process inbound email](#receive-and-process-inbound-email)
   - [Display previous emails on applicant record](#display-previous-emails-on-applicant-record)
+  - [Reply to inbound emails](#reply-to-inbound-emails)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
@@ -841,3 +842,155 @@ irb(main):011:0> Email.last.user
 ## Display previous emails on applicant record
 
 In this section, will display emails on applicant show page in UI.
+
+Start with EmailsController:
+
+```ruby
+# app/controllers/emails_controller.rb
+def index
+  @emails = Email.where(applicant_id: params[:applicant_id]).with_rich_text_body.order(created_at: :desc)
+end
+
+def show
+  @email = Email.find(params[:id])
+  html = render_to_string(partial: 'email', locals: { email: @email })
+  render operations: cable_car
+    .inner_html('#slideover-content', html: html)
+    .text_content('#slideover-header', text: @email.subject)
+end
+```
+
+**Notes:**
+
+* `with_rich_text_body` prevents N+1 queries retrieving body from `ActionTextRichTexts` model/table for each email individually.
+* will view emails in slideover drawer (same pattern used in new action for emails, jobs, applicants)
+
+Create views to display emails:
+
+```
+touch app/views/emails/index.html.erb
+touch app/views/emails/_email.html.erb
+touch app/views/emails/_list_item.html.erb
+```
+
+```erb
+<!-- app/views/emails/index.html.erb -->
+<%= turbo_frame_tag "emails" do %>
+  <div id="emails-list" class="divide-y divide-gray-500">
+    <% @emails.each do |email| %>
+      <%= render "list_item", email: email %>
+    <% end %>
+  </div>
+<% end %>
+```
+
+**Notes:**
+
+* Emails will be displayed in Turbo Frame (same pattern used to display resumes).
+* `emails#index` action renders all emails wrapped in `emails` Turbo Frame.
+
+Here is the list partial that's rendered by the index view:
+
+```erb
+<!-- app/views/emails/_list_item.html.erb -->
+<div>
+  <%= link_to applicant_email_path(@applicant, email), data: { action: "click->slideover#open", remote: true } do %>
+    <div class="p-2 hover:bg-blue-200 cursor-pointer flex items-center">
+      <div class="mr-2 text-gray-500">
+        <%= inline_svg_tag(email_type_icon(email.email_type), class: "h-6 w-6 inline-block") %>
+      </div>
+      <div>
+        <h4 class="text-lg text-gray-900"><%= email.subject %></h4>
+        <div class="text-gray-700 text-sm">
+          <p><%= l(email.created_at, format: :long) %></p>
+        </div>
+      </div>
+    </div>
+  <% end %>
+</div>
+```
+
+**Notes:**
+
+* Show link uses `slideover` functionality with data-action `click->slideover#open`
+* Using helper method `email_type_icon` to render svg icon for each email depending on its type.
+* `l` is a built-in Rails helper method to format dates/times based on current locale, eg: `<p> January 22, 2023 at 12:00 PM </p>`
+
+svg helper here:
+
+```ruby
+# app/helpers/emails_helper.rb
+module EmailsHelper
+  def email_type_icon(email_type)
+    email_type == 'inbound' ? 'arrow-circle-right' : 'arrow-circle-left'
+  end
+end
+```
+
+Create the icons and fill in contents:
+
+```
+touch app/assets/images/arrow-circle-left.svg
+touch app/assets/images/arrow-circle-right.svg
+```
+
+Here's the email partial:
+
+```ruby
+# app/views/emails/_email.html.erb
+<div class="px-4">
+  <div class="py-2 border-b border-gray-900 text-lg">
+    <%= @email.body %>
+  </div>
+  <div class="text-sm text-gray-500 py-4">
+    <% if @email.outbound? %>
+      Sent by <%= @email.user.email %> on <%= l(@email.created_at, format: :long) %>
+    <% else %>
+      <div class="flex justify-between items-center">
+        <span>
+          Sent by <%= @email.applicant.name %> on <%= l(@email.created_at, format: :long) %>
+        </span>
+        <span>
+          <%= link_to "Reply", "#", class: "btn-primary-outline", data: { remote: true } %>
+        </span>
+      </div>
+    <% end %>
+  </div>
+</div>
+```
+
+**Notes:**
+
+* This partial is rendered by slideover drawer from `show` action
+* The replying to inbound emails link is just a placeholder for now
+
+Update applicant show view to display list of emails related to this applicant next to the resume:
+
+```erb
+<!-- app/views/applicants/show.html.erb -->
+<div class="flex w-full">
+  <div class="emails-container w-1/3 bg-gray-100 border-2 border-gray-200 rounded p-4 mr-2 shadow divide-y divide-gray-500 overflow-y-scroll">
+    <h3 class="text-xl font-bold">Communication history</h3>
+    <%= turbo_frame_tag "emails", src: applicant_emails_path(@applicant), class: "max-height[1000px]" %>
+  </div>
+  <% if @applicant.resume.attached? %>
+    <%= turbo_frame_tag "resume", src: applicant_resume_path(@applicant), loading: "lazy", class: "w-2/3" do %>
+      <div class="w-full bg-gray-100 rounded flex justify-center items-center" style="height: 1000px;">
+        Loading...
+      </div>
+    <% end %>
+  <% end %>
+</div>
+```
+
+**Notes:**
+
+* `emails` turbo frame is used with a `src` value: eager loading contents rather than lazy loading we did with resume
+
+To try all this out, select an applicant, navigate to applicant show page, eg: `http://localhost:3000/applicants/263`, click Send email, and also use the inbound email form referenced earlier to send inbound email from applicant to whatever test user you're logged in as. Applicant view will look something like this:
+
+![applicant show with email list](../doc-images/applicant-show-with-email-list.png "applicant show with email list")
+
+## Reply to inbound emails
+
+Left here...
